@@ -1,0 +1,150 @@
+{
+  "name": "staking",
+  "developer": {
+    "archwayd": {
+      "docker": true
+    },
+    "scripts": {
+      "test": "cargo unit-test",
+      "build": "cargo build",
+      "optimize": "cargo run-script optimize",
+      "wasm": "cargo wasm",
+      "query": "archwayd query wasm",
+      "tx": "archwayd tx wasm execute"
+    },
+    "deployments": [
+      {
+        "type": "set-metadata",
+        "chainId": "constantine-1",
+        "contract": "archway1j6ghacj408ncc3fu5vapw3nda0x8fzzsdexuf843c625ksu94m8s0dy0vx",
+        "contractMetadata": {
+          "developerAddress": "archway10h2w7jfxtc8m7wvjar9jtufpm3s7srqgqqyjea",
+          "rewardAddress": "archway1j6ghacj408ncc3fu5vapw3nda0x8fzzsdexuf843c625ksu94m8s0dy0vx",
+          "collectPremium": false,
+          "gasRebate": false
+        }
+      },
+      {
+        "type": "instantiate",
+        "chainId": "constantine-1",
+        "codeId": 263,
+        "address": "archway1j6ghacj408ncc3fu5vapw3nda0x8fzzsdexuf843c625ksu94m8s0dy0vx",
+        "admin": "archway10h2w7jfxtc8m7wvjar9jtufpm3s7srqgqqyjea"
+      },
+      {
+        "type": "create",
+        "chainId": "constantine-1",
+        "codeId": 263
+      },
+      {
+        "type": "set-metadata",
+        "chainId": "constantine-1",
+        "contract": "archway1ek0t9s3qz3x4yr6qtttzw4sjpun4a04f26c02799wsy5397mmwhqldnvy6",
+        "contractMetadata": {
+          "developerAddress": "archway10h2w7jfxtc8m7wvjar9jtufpm3s7srqgqqyjea",
+          "rewardAddress": "archway1ek0t9s3qz3x4yr6qtttzw4sjpun4a04f26c02799wsy5397mmwhqldnvy6",
+          "collectPremium": false,
+          "gasRebate": false
+        }
+      },
+      {
+        "type": "instantiate",
+        "chainId": "constantine-1",
+        "codeId": 248,
+        "address": "archway1ek0t9s3qz3x4yr6qtttzw4sjpun4a04f26c02799wsy5397mmwhqldnvy6",
+        "admin": "archway10h2w7jfxtc8m7wvjar9jtufpm3s7srqgqqyjea"
+      },
+      {
+        "type": "create",
+        "chainId": "constantine-1",
+        "codeId": 248
+      },
+      {
+        "type": "set-metadata",
+        "chainId": "torii-1",
+        "contract": "archway1wn2mqpnslneqavfp56vttx2yuzspqm6dm5uyn0u092m3qpgdn45sfuyvn5",
+        "contractMetadata": {
+          "developerAddress": "archway10h2w7jfxtc8m7wvjar9jtufpm3s7srqgqqyjea",
+          "rewardAddress": "archway1wn2mqpnslneqavfp56vttx2yuzspqm6dm5uyn0u092m3qpgdn45sfuyvn5",
+          "collectPremium": true,
+          "premiumPercentage": 100
+        }
+      },
+      {
+        "type": "instantiate",
+        "chainId": "torii-1",
+        "codeId": 49283,
+        "address": "archway1wn2mqpnslneqavfp56vttx2yuzspqm6dm5uyn0u092m3qpgdn45sfuyvn5",
+        "admin": "archway10h2w7jfxtc8m7wvjar9jtufpm3s7srqgqqyjea"
+      },
+      {
+        "type": "create",
+        "chainId": "torii-1",
+        "codeId": 49283
+      },
+      {
+        "type": "instantiate",
+        "chainId": "torii-1",
+        "codeId": 49281,
+        "address": "archway16ewp6x5ex4hqzk4x3j8cdjvnpqrhhcp6d7lgjg9jyz3rxd3lfzcqktjn2a",
+        "admin": "archway10h2w7jfxtc8m7wvjar9jtufpm3s7srqgqqyjea"
+      },
+      {
+        "type": "create",
+        "chainId": "torii-1",
+        "codeId": 49281
+      },
+      {
+        "type": "set-metadata",
+        "chainId": "constantine-1",
+        "contract": "archway19nqdvd7ru6hne0kg82stz6fwhv78plstwmn60hpxcvvkkuvq6csszftw0k",
+        "contractMetadata": {
+          "developerAddress": "archway10h2w7jfxtc8m7wvjar9jtufpm3s7srqgqqyjea",
+          "rewardAddress": "archway19nqdvd7ru6hne0kg82stz6fwhv78plstwmn60hpxcvvkkuvq6csszftw0k",
+          "collectPremium": false,
+          "gasRebate": false
+        }
+      },
+      {
+        "type": "instantiate",
+        "chainId": "constantine-1",
+        "codeId": 224,
+        "address": "archway19nqdvd7ru6hne0kg82stz6fwhv78plstwmn60hpxcvvkkuvq6csszftw0k",
+        "admin": "archway10h2w7jfxtc8m7wvjar9jtufpm3s7srqgqqyjea"
+      },
+      {
+        "type": "create",
+        "chainId": "constantine-1",
+        "codeId": 224
+      }
+    ]
+  },
+  "network": {
+    "name": "constantine",
+    "chainId": "constantine-1",
+    "type": "testnet",
+    "fees": {
+      "feeDenom": "uconst"
+    },
+    "gas": {
+      "prices": "0.002uconst",
+      "mode": "auto",
+      "adjustment": "1.3"
+    },
+    "wasm": {
+      "bech32Hrp": "archway",
+      "archwayd": "0.0.4",
+      "configDir": ".archway",
+      "binary": "archwayd"
+    },
+    "urls": {
+      "rpc": {
+        "url": "https://rpc.constantine-1.archway.tech",
+        "port": 443
+      },
+      "faucets": [
+        "https://faucet.constantine-1.archway.tech"
+      ]
+    }
+  }
+}
