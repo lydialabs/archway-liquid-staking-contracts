@@ -14,6 +14,18 @@
     },
     "deployments": [
       {
+        "type": "instantiate",
+        "chainId": "constantine-1",
+        "codeId": 330,
+        "address": "archway1v6nqc3yy9nuz2nd6lznalxmraavzyx4m084jhj0l988qg2nkc5rs0ctny3",
+        "admin": "archway10h2w7jfxtc8m7wvjar9jtufpm3s7srqgqqyjea"
+      },
+      {
+        "type": "create",
+        "chainId": "constantine-1",
+        "codeId": 330
+      },
+      {
         "type": "set-metadata",
         "chainId": "constantine-1",
         "contract": "archway1neanptry8lyml3993w7u272yc9zgrehx70qx6wk5p8zy5dce6mpsjcvant",

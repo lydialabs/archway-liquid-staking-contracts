@@ -17,6 +17,7 @@ use crate::msg::{ExecuteMsg, ConfigResponse, StatusResponse, InstantiateMsg, Que
     OrderInfoOfResponse, OrderBookResponse, StakingManagerQueryMsg, 
     StakingManagerStatusResponse};
 use crate::state::{ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, QUEUE_ID};
+use cw_utils::{must_pay, nonpayable};
 
 const FALLBACK_RATIO: Decimal = Decimal::one();
 
@@ -31,6 +32,8 @@ pub fn instantiate(
     info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
     let linked_list_init = LinkedList {
@@ -85,18 +88,13 @@ pub fn execute_add(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respons
     // ensure we have the proper denom
     let config = CONFIG.load(deps.storage)?;
     // payment finds the proper coin (or throws an error)
-    let payment = info
-        .funds
-        .iter()
-        .find(|x| x.denom == config.bond_denom)
-        .ok_or_else(|| ContractError::EmptyBalance {
-            denom: config.bond_denom.clone(),
-        })?;
+    let payment = must_pay(&info, &config.bond_denom)?;
+
     let balance = deps
         .querier
         .query_balance(&env.contract.address, &config.bond_denom)?;
     let mut supply = TOTAL_SUPPLY.load(deps.storage)?;
-    let mut cur_native = balance.amount.checked_sub(payment.amount).map_err(StdError::overflow)?;
+    let mut cur_native = balance.amount.checked_sub(payment).map_err(StdError::overflow)?;
     let mut res = Response::new();
     // withdraw all native token from contract when there is no lp token in the pool
     if !cur_native.is_zero() && supply.issued.is_zero() {
@@ -106,7 +104,10 @@ pub fn execute_add(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respons
         });
         cur_native = Uint128::zero();
     }
-    let mut new_node_value = payment.amount * get_ratio(supply.issued, cur_native);
+    let mut new_node_value = payment * get_ratio(supply.issued, cur_native);
+    if new_node_value.is_zero() {
+        return Err(ContractError::NothingToAdd {});
+    }
     // update supply info
     supply.issued += new_node_value;
     TOTAL_SUPPLY.save(deps.storage, &supply)?;
@@ -123,11 +124,13 @@ pub fn execute_add(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respons
     
     res = res.add_attribute("action", "add")
         .add_attribute("from", info.sender)
-        .add_attribute("amount", payment.amount);
+        .add_attribute("amount", payment);
     Ok(res)
 }
 
 pub fn execute_remove(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+
     // ensure we have the proper denom
     let config = CONFIG.load(deps.storage)?;
 
@@ -145,6 +148,9 @@ pub fn execute_remove(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Resp
         .query_balance(&env.contract.address, &config.bond_denom)?;
     let mut supply = TOTAL_SUPPLY.load(deps.storage)?;
     let native_amount = cur_node.value.multiply_ratio(balance.amount, supply.issued);
+    if native_amount.is_zero() {
+        return Err(ContractError::GainNothingWhenRemove {});
+    }
     supply.issued = supply.issued.checked_sub(cur_node.value).map_err(StdError::overflow)?;
     TOTAL_SUPPLY.save(deps.storage, &supply)?;
 
@@ -165,6 +171,8 @@ pub fn execute_claim(
     deps: DepsMut,
     info: MessageInfo,
 ) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+    
     let config = CONFIG.load(deps.storage)?;
     let to_send = CLAIMABLE.may_load(deps.storage, &info.sender)?.unwrap_or_default();
     if to_send == Uint128::zero() {
@@ -204,7 +212,8 @@ pub fn execute_receive(
     // wrapper.sender is the address of the user that requested the cw20 contract to send this.
     // This cannot be fully trusted (the cw20 contract can fake it), so only use it for actions
     // in the address's favor (like paying/bonding tokens, not withdrawls)
-
+    nonpayable(&info)?;
+    
     let config = CONFIG.load(deps.storage)?;
     // only allow liquid token contract to call 
     if info.sender != config.liquid_token_addr {
@@ -234,6 +243,9 @@ pub fn execute_swap(
             msg: to_binary(&staking_query_msg)?,
     }))?;
     let order_native_value = order_liquid_token_value * staking_query_response.ratio;
+    if order_native_value.is_zero() {
+        return Err(ContractError::GainNothingWhenSwap {});
+    }
     let balance = deps
         .querier
         .query_balance(contract_addr, &config.bond_denom)?;
@@ -303,6 +315,8 @@ pub fn execute_set_swap_fee(
     info: MessageInfo,
     swap_fee: Uint128,
 ) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+
     let mut config = CONFIG.load(deps.storage)?;
     // only allow liquid token contract to call 
     if info.sender != config.owner {

@@ -16,6 +16,7 @@ use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, ConfigResponse, StatusResponse, UnstakingQueueResponse, 
     InstantiateMsg, QueryMsg};
 use crate::state::{ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, UNDER_UNSTAKING};
+use cw_utils::{must_pay, nonpayable};
 
 const FALLBACK_RATIO: Decimal = Decimal::one();
 
@@ -30,6 +31,8 @@ pub fn instantiate(
     info: MessageInfo,
     msg: InstantiateMsg,
 ) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+
     set_contract_version(deps.storage, CONTRACT_NAME, CONTRACT_VERSION)?;
 
     let linked_list_init = LinkedList {
@@ -235,6 +238,9 @@ pub fn _mint_liquid_token(
     } else {
         native_amount.multiply_ratio(liquid_supply, supply.native)
     };
+    if to_mint.is_zero() {
+        return Err(ContractError::GainNothingWhenStake {});
+    }
     supply.native += native_amount;
     TOTAL_SUPPLY.save(deps.storage, &supply)?;
 
@@ -261,17 +267,11 @@ pub fn execute_stake(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
     // ensure we have the proper denom
     let config = CONFIG.load(deps.storage)?;
     // payment finds the proper coin (or throws an error)
-    let payment = info
-        .funds
-        .iter()
-        .find(|x| x.denom == config.bond_denom)
-        .ok_or_else(|| ContractError::EmptyBalance {
-            denom: config.bond_denom.clone(),
-        })?;
+    let payment = must_pay(&info, &config.bond_denom)?;
 
     let contract_addr = env.contract.address;
     let msg1 = to_binary(&ExecuteMsg::_PerformCheck {})?;
-    let msg2 = to_binary(&ExecuteMsg::_MintLiquidToken { receiver: info.sender, native_amount: payment.amount })?;
+    let msg2 = to_binary(&ExecuteMsg::_MintLiquidToken { receiver: info.sender, native_amount: payment })?;
     
     let res = Response::new()
         .add_message(WasmMsg::Execute {
@@ -307,6 +307,9 @@ pub fn execute_unstake(
     let mut supply = TOTAL_SUPPLY.load(deps.storage)?;
     let liquid_supply = get_token_supply(&deps.querier, config.liquid_token_addr)?;
     let amount_to_unstake = amount.multiply_ratio(supply.native, liquid_supply);
+    if amount_to_unstake.is_zero() {
+        return Err(ContractError::GainNothingWhenUnstake {});
+    }
     supply.native = supply.native.checked_sub(amount_to_unstake).map_err(StdError::overflow)?;
     supply.unstakings += amount_to_unstake;
     TOTAL_SUPPLY.save(deps.storage, &supply)?;
@@ -341,6 +344,7 @@ pub fn execute_receive(
     // wrapper.sender is the address of the user that requested the cw20 contract to send this.
     // This cannot be fully trusted (the cw20 contract can fake it), so only use it for actions
     // in the address's favor (like paying/bonding tokens, not withdrawls)
+    nonpayable(&info)?;
 
     let config = CONFIG.load(deps.storage)?;
     // only allow liquid token contract to call 
@@ -356,6 +360,8 @@ pub fn execute_claim(
     deps: DepsMut,
     info: MessageInfo,
 ) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+
     let config = CONFIG.load(deps.storage)?;
 
     let mut to_send:Uint128 = Uint128::zero();
@@ -393,6 +399,8 @@ pub fn execute_set_liquid_token(
     info: MessageInfo,
     address: Addr,
 ) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+
     let config = CONFIG.load(deps.storage)?;
     // only allow owner to call 
     if info.sender != config.owner {
