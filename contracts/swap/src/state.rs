@@ -29,5 +29,9 @@ pub struct Supply {
 
 pub const CONFIG: Item<ConfigInfo> = Item::new("config");
 pub const TOTAL_SUPPLY: Item<Supply> = Item::new("total_supply");
+// liquidity token
 pub const CLAIMABLE: Map<&Addr, Uint128> = Map::new("claimable");
+// native token
+pub const UNCLAIMED: Map<&Addr, Uint128> = Map::new("unclaimed");
 pub const QUEUE_ID: Map<&Addr, u64> = Map::new("queue_id");
+pub const NATIVE_POOL: Item<Uint128> = Item::new("native_pool");

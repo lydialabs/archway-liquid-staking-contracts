@@ -1,22 +1,23 @@
+use std::ops::{Mul, Sub};
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    coins, to_binary, Addr, BankMsg, Binary, Decimal, Deps, DepsMut, Env, MessageInfo, 
-    QueryRequest, WasmQuery, Response, StdError, StdResult, Uint128, 
+    coins, to_binary, Addr, BankMsg, Binary, Decimal, Deps, DepsMut, Env, MessageInfo,
+    QueryRequest, WasmQuery, Response, StdError, StdResult, Uint128,
 };
 
 use cw2::set_contract_version;
-use cw20::{BalanceResponse, Cw20Contract, Cw20ExecuteMsg, Cw20ReceiveMsg, 
+use cw20::{BalanceResponse, Cw20Contract, Cw20ExecuteMsg, Cw20ReceiveMsg,
     };
 
-use crate::linked_list::{LinkedList, NodeWithId, node_read, node_update_value, 
-    linked_list, linked_list_read, linked_list_append, linked_list_remove_head, 
+use crate::linked_list::{LinkedList, NodeWithId, node_read, node_update_value,
+    linked_list, linked_list_read, linked_list_append, linked_list_remove_head,
     linked_list_remove, linked_list_get_list};
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, ConfigResponse, StatusResponse, InstantiateMsg, QueryMsg, 
-    OrderInfoOfResponse, OrderBookResponse, StakingManagerQueryMsg, 
+use crate::msg::{ExecuteMsg, ConfigResponse, StatusResponse, InstantiateMsg, QueryMsg,
+    OrderInfoOfResponse, OrderBookResponse, StakingManagerQueryMsg,
     StakingManagerStatusResponse};
-use crate::state::{ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, QUEUE_ID};
+use crate::state::{ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, QUEUE_ID, UNCLAIMED, NATIVE_POOL};
 use cw_utils::{must_pay, nonpayable};
 
 const FALLBACK_RATIO: Decimal = Decimal::one();
@@ -90,11 +91,8 @@ pub fn execute_add(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respons
     // payment finds the proper coin (or throws an error)
     let payment = must_pay(&info, &config.bond_denom)?;
 
-    let balance = deps
-        .querier
-        .query_balance(&env.contract.address, &config.bond_denom)?;
     let mut supply = TOTAL_SUPPLY.load(deps.storage)?;
-    let mut cur_native = balance.amount.checked_sub(payment).map_err(StdError::overflow)?;
+    let mut cur_native = NATIVE_POOL.load(deps.storage)?;
     let mut res = Response::new();
     // withdraw all native token from contract when there is no lp token in the pool
     if !cur_native.is_zero() && supply.issued.is_zero() {
@@ -108,20 +106,26 @@ pub fn execute_add(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respons
     if new_node_value.is_zero() {
         return Err(ContractError::NothingToAdd {});
     }
+    let mut last_deposit = payment;
     // update supply info
     supply.issued += new_node_value;
     TOTAL_SUPPLY.save(deps.storage, &supply)?;
+    NATIVE_POOL.update(
+        deps.storage,
+        |total: Option<Uint128>| -> StdResult<_> { Ok(total.unwrap_or_default() + payment) },
+    )?;
     // update node id of user in the queue
     let old_node_id = QUEUE_ID.may_load(deps.storage, &info.sender)?.unwrap_or_default();
     if old_node_id > 0 {
         let old_node_key = &old_node_id.to_be_bytes();
         let old_node = node_read(deps.storage).load(old_node_key)?;
         new_node_value += old_node.value;
+        last_deposit += old_node.last_deposit;
         linked_list_remove(deps.storage, old_node_id)?;
     }
-    let new_node_id = linked_list_append(deps.storage, info.sender.clone(), new_node_value, env.block.height)?;
+    let new_node_id = linked_list_append(deps.storage, info.sender.clone(), new_node_value, last_deposit, env.block.height)?;
     QUEUE_ID.save(deps.storage, &info.sender, &new_node_id)?;
-    
+
     res = res.add_attribute("action", "add")
         .add_attribute("from", info.sender)
         .add_attribute("amount", payment);
@@ -143,16 +147,15 @@ pub fn execute_remove(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Resp
     let cur_node = node_read(deps.storage).load(node_key)?;
     linked_list_remove(deps.storage, node_id)?;
     QUEUE_ID.save(deps.storage, &info.sender, &0)?;
-    let balance = deps
-        .querier
-        .query_balance(&env.contract.address, &config.bond_denom)?;
+    let balance = NATIVE_POOL.load(deps.storage)?;
     let mut supply = TOTAL_SUPPLY.load(deps.storage)?;
-    let native_amount = cur_node.value.multiply_ratio(balance.amount, supply.issued);
+    let native_amount = cur_node.value.multiply_ratio(balance, supply.issued);
     if native_amount.is_zero() {
         return Err(ContractError::GainNothingWhenRemove {});
     }
     supply.issued = supply.issued.checked_sub(cur_node.value).map_err(StdError::overflow)?;
     TOTAL_SUPPLY.save(deps.storage, &supply)?;
+    NATIVE_POOL.save(deps.storage, &balance.checked_sub(native_amount)?)?;
 
     // transfer tokens to the sender
     let res = Response::new()
@@ -172,14 +175,14 @@ pub fn execute_claim(
     info: MessageInfo,
 ) -> Result<Response, ContractError> {
     nonpayable(&info)?;
-    
+
     let config = CONFIG.load(deps.storage)?;
     let to_send = CLAIMABLE.may_load(deps.storage, &info.sender)?.unwrap_or_default();
     if to_send == Uint128::zero() {
         return Err(ContractError::NothingToClaim {});
     }
     CLAIMABLE.save(deps.storage, &info.sender, &Uint128::zero())?;
-    
+
     TOTAL_SUPPLY.update(deps.storage, |mut supply| -> StdResult<_> {
         supply.claims = supply.claims.checked_sub(to_send)?;
         Ok(supply)
@@ -192,10 +195,50 @@ pub fn execute_claim(
         recipient: info.sender.to_string(),
         amount: to_send,
     })?;
-    
+
+    let res = Response::new();
+    let mut unclaimed = UNCLAIMED.may_load(deps.storage, &info.sender)?.unwrap_or_default();
+    if unclaimed.u128() > 0 {
+        UNCLAIMED.save(deps.storage, &info.sender, &Uint128::zero())?;
+    }
+    // query current rewards
+    let position = QUEUE_ID.may_load(deps.storage, &info.sender)?.unwrap_or_default();
+    if position > 0 {
+        let position_key = &position.to_be_bytes();
+        let position_node = node_read(deps.storage).load(position_key)?;
+        let balance = NATIVE_POOL.load(deps.storage)?;
+        let supply = TOTAL_SUPPLY.load(deps.storage)?.issued;
+        let rewards_lp = position_node.value.
+            checked_sub(position_node.last_deposit * get_ratio(supply, balance))?;
+        if rewards_lp.u128() > 0 {
+            let unclaimed_position = rewards_lp * get_ratio(balance, supply);
+            unclaimed += unclaimed_position;
+            NATIVE_POOL.save(deps.storage, &balance.checked_sub(unclaimed_position)?)?;
+            TOTAL_SUPPLY.update(deps.storage, |mut supply| -> StdResult<_> {
+                supply.issued = supply.issued.checked_sub(rewards_lp)?;
+                Ok(supply)
+            })?;
+
+            // update node
+            node_update_value(
+                deps.storage,
+                position,
+                position_node.value.checked_sub(rewards_lp)?,
+                position_node.last_deposit
+            )?;
+        }
+    }
+
+    // transfer unclaimed rewards
+    if unclaimed.u128() > 0 {
+        res.add_message(BankMsg::Send {
+            to_address: info.sender.to_string(),
+            amount: coins(unclaimed.u128(), config.bond_denom),
+        })
+    }
+
     // transfer tokens to the sender
-    let res = Response::new()
-        .add_message(msg)
+    res.add_message(msg)
         .add_attribute("action", "claim")
         .add_attribute("from", info.sender)
         .add_attribute("amount", to_send);
@@ -213,9 +256,9 @@ pub fn execute_receive(
     // This cannot be fully trusted (the cw20 contract can fake it), so only use it for actions
     // in the address's favor (like paying/bonding tokens, not withdrawls)
     nonpayable(&info)?;
-    
+
     let config = CONFIG.load(deps.storage)?;
-    // only allow liquid token contract to call 
+    // only allow liquid token contract to call
     if info.sender != config.liquid_token_addr {
         return Err(ContractError::Unauthorized {});
     }
@@ -246,20 +289,19 @@ pub fn execute_swap(
     if order_native_value.is_zero() {
         return Err(ContractError::GainNothingWhenSwap {});
     }
-    let balance = deps
-        .querier
-        .query_balance(contract_addr, &config.bond_denom)?;
+    let balance = NATIVE_POOL.load(deps.storage)?;
     let mut supply = TOTAL_SUPPLY.load(deps.storage)?;
-    let order_lp_token_value = order_native_value * get_ratio(supply.issued, balance.amount);
+    let order_lp_token_value = order_native_value * get_ratio(supply.issued, balance);
     if order_lp_token_value > supply.issued {
         return Err(ContractError::InsufficientLiquidity {});
     }
     supply.issued = supply.issued.checked_sub(order_lp_token_value).map_err(StdError::overflow)?;
     supply.claims += amount;
     TOTAL_SUPPLY.save(deps.storage, &supply)?;
-    
+
+    let mut unclaimed_rewards = Uint128::new(0);
     let mut is_filled = false;
-    let mut remain_lp_token = order_lp_token_value;
+    let mut remain_native_token = order_native_value;
     while !is_filled {
         // Get next order from the queue
         let linked_list_info = linked_list_read(deps.storage).load()?;
@@ -267,36 +309,63 @@ pub fn execute_swap(
         let counterparty_key = &counterparty_id.to_be_bytes();
         let counterparty_order = node_read(deps.storage).load(counterparty_key)?;
         let counterparty_address = counterparty_order.receiver;
+        // used to calculate rewards
         let counterparty_lp_amount = counterparty_order.value;
+        // used to swap
+        let counterparty_ld_amount = counterparty_order.last_deposit;
         let mut counterparty_filled = false;
         // Perform match. Matched amount is up to order size
-        let matched_lp = counterparty_lp_amount.min(remain_lp_token);
-        remain_lp_token -= matched_lp;
+        let matched_ld = counterparty_ld_amount.min(remain_native_token);
+        remain_native_token -= matched_ld;
         // Check for a full fill of the order
-        if matched_lp == counterparty_lp_amount {
+        if matched_ld == counterparty_ld_amount {
             counterparty_filled = true;
         }
         // Counterparty earns a proportional amount of order + fees
-        let liquid_token_earning = amount.multiply_ratio(matched_lp, order_lp_token_value);
+        let liquid_token_earning = amount.multiply_ratio(matched_ld, order_native_value);
         CLAIMABLE.update(
             deps.storage,
             &counterparty_address,
             |claimable: Option<Uint128>| -> StdResult<_> { Ok(claimable.unwrap_or_default() + liquid_token_earning) },
         )?;
-        
+        // calculate portion rewards of total swapped and accrue for user to claim late
+        // formula: (token_swapped /last_deposit) * (staked_token * ratio - last_deposit)
+        let reward_portion = (counterparty_lp_amount * get_ratio(supply.issued, balance)
+            .checked_sub(matched_ld))
+            .multiply_ratio(matched_ld, counterparty_ld_amount);
+        unclaimed_rewards = unclaimed_rewards.checked_add(reward_portion)?;
+        UNCLAIMED.update(
+            deps.storage,
+            &counterparty_address,
+            |unclaimed: Option<Uint128>| -> StdResult<_> { Ok(unclaimed.unwrap_or_default() + reward_portion) },
+        )?;
+
         if counterparty_filled {
             linked_list_remove_head(deps.storage)?;
             QUEUE_ID.save(deps.storage, &counterparty_address, &0)?;
         } else {
-            let new_counterparty_value = counterparty_order.value.checked_sub(matched_lp).map_err(StdError::overflow)?;
+            let new_counterparty_ld_value = counterparty_ld_amount.checked_sub(matched_ld).map_err(StdError::overflow)?;
+            let new_counterparty_value = counterparty_lp_amount.checked_sub(
+                counterparty_lp_amount.multiply_ratio(matched_ld, counterparty_ld_amount)
+            )?;
             // counterparty_order.value = new_counterparty_value;
-            node_update_value(deps.storage, counterparty_id, new_counterparty_value)?;
+            node_update_value(deps.storage, counterparty_id, new_counterparty_value, new_counterparty_ld_value)?;
         }
         // If no more remaining lp token, the order is fully filled
         if remain_lp_token == Uint128::zero() {
             is_filled = true;
         }
     }
+
+    // update native balance pool
+    NATIVE_POOL.update(
+        deps.storage,
+        |pool: Option<Uint128>| -> StdResult<_> {
+            Ok(pool.unwrap_or_default()
+                .checked_sub(unclaimed_rewards)?
+                .checked_sub(order_native_value)?)
+        },
+    )?;
 
     // transfer native tokens to the sender
     let res = Response::new()
@@ -318,7 +387,7 @@ pub fn execute_set_swap_fee(
     nonpayable(&info)?;
 
     let mut config = CONFIG.load(deps.storage)?;
-    // only allow liquid token contract to call 
+    // only allow liquid token contract to call
     if info.sender != config.owner {
         return Err(ContractError::Unauthorized {});
     }
