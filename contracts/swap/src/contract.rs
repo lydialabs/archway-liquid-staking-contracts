@@ -1,4 +1,3 @@
-use std::ops::{Mul, Sub};
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
@@ -112,7 +111,7 @@ pub fn execute_add(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respons
     TOTAL_SUPPLY.save(deps.storage, &supply)?;
     NATIVE_POOL.update(
         deps.storage,
-        |total: Option<Uint128>| -> StdResult<_> { Ok(total.unwrap_or_default() + payment) },
+        |total: Uint128| -> StdResult<_> { Ok(total + payment) },
     )?;
     // update node id of user in the queue
     let old_node_id = QUEUE_ID.may_load(deps.storage, &info.sender)?.unwrap_or_default();
@@ -132,7 +131,7 @@ pub fn execute_add(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respons
     Ok(res)
 }
 
-pub fn execute_remove(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, ContractError> {
+pub fn execute_remove(deps: DepsMut, _env: Env, info: MessageInfo) -> Result<Response, ContractError> {
     nonpayable(&info)?;
 
     // ensure we have the proper denom
@@ -155,7 +154,7 @@ pub fn execute_remove(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Resp
     }
     supply.issued = supply.issued.checked_sub(cur_node.value).map_err(StdError::overflow)?;
     TOTAL_SUPPLY.save(deps.storage, &supply)?;
-    NATIVE_POOL.save(deps.storage, &balance.checked_sub(native_amount)?)?;
+    NATIVE_POOL.save(deps.storage, &balance.checked_sub(native_amount).map_err(StdError::overflow)?)?;
 
     // transfer tokens to the sender
     let res = Response::new()
@@ -196,7 +195,7 @@ pub fn execute_claim(
         amount: to_send,
     })?;
 
-    let res = Response::new();
+    let mut res = Response::new();
     let mut unclaimed = UNCLAIMED.may_load(deps.storage, &info.sender)?.unwrap_or_default();
     if unclaimed.u128() > 0 {
         UNCLAIMED.save(deps.storage, &info.sender, &Uint128::zero())?;
@@ -209,11 +208,12 @@ pub fn execute_claim(
         let balance = NATIVE_POOL.load(deps.storage)?;
         let supply = TOTAL_SUPPLY.load(deps.storage)?.issued;
         let rewards_lp = position_node.value.
-            checked_sub(position_node.last_deposit * get_ratio(supply, balance))?;
+            checked_sub(position_node.last_deposit * get_ratio(supply, balance))
+            .map_err(StdError::overflow)?;
         if rewards_lp.u128() > 0 {
             let unclaimed_position = rewards_lp * get_ratio(balance, supply);
             unclaimed += unclaimed_position;
-            NATIVE_POOL.save(deps.storage, &balance.checked_sub(unclaimed_position)?)?;
+            NATIVE_POOL.save(deps.storage, &balance.checked_sub(unclaimed_position).map_err(StdError::overflow)?)?;
             TOTAL_SUPPLY.update(deps.storage, |mut supply| -> StdResult<_> {
                 supply.issued = supply.issued.checked_sub(rewards_lp)?;
                 Ok(supply)
@@ -223,7 +223,7 @@ pub fn execute_claim(
             node_update_value(
                 deps.storage,
                 position,
-                position_node.value.checked_sub(rewards_lp)?,
+                position_node.value.checked_sub(rewards_lp).map_err(StdError::overflow)?,
                 position_node.last_deposit
             )?;
         }
@@ -231,14 +231,14 @@ pub fn execute_claim(
 
     // transfer unclaimed rewards
     if unclaimed.u128() > 0 {
-        res.add_message(BankMsg::Send {
+        res = res.add_message(BankMsg::Send {
             to_address: info.sender.to_string(),
             amount: coins(unclaimed.u128(), config.bond_denom),
-        })
+        });
     }
 
     // transfer tokens to the sender
-    res.add_message(msg)
+    res = res.add_message(msg)
         .add_attribute("action", "claim")
         .add_attribute("from", info.sender)
         .add_attribute("amount", to_send);
@@ -269,11 +269,10 @@ pub fn execute_receive(
 
 pub fn execute_swap(
     deps: DepsMut,
-    env: Env,
+    _env: Env,
     sender: Addr,
     amount: Uint128,
 ) -> Result<Response, ContractError> {
-    let contract_addr = env.contract.address;
     let config = CONFIG.load(deps.storage)?;
 
     let swap_fee = amount.multiply_ratio(config.swap_fee, 10000u128);
@@ -330,10 +329,10 @@ pub fn execute_swap(
         )?;
         // calculate portion rewards of total swapped and accrue for user to claim late
         // formula: (token_swapped /last_deposit) * (staked_token * ratio - last_deposit)
-        let reward_portion = (counterparty_lp_amount * get_ratio(supply.issued, balance)
-            .checked_sub(matched_ld))
+        let reward_portion = ((counterparty_lp_amount * get_ratio(supply.issued, balance))
+            .checked_sub(matched_ld)).map_err(StdError::overflow)?
             .multiply_ratio(matched_ld, counterparty_ld_amount);
-        unclaimed_rewards = unclaimed_rewards.checked_add(reward_portion)?;
+        unclaimed_rewards = unclaimed_rewards.checked_add(reward_portion).map_err(StdError::overflow)?;
         UNCLAIMED.update(
             deps.storage,
             &counterparty_address,
@@ -347,12 +346,12 @@ pub fn execute_swap(
             let new_counterparty_ld_value = counterparty_ld_amount.checked_sub(matched_ld).map_err(StdError::overflow)?;
             let new_counterparty_value = counterparty_lp_amount.checked_sub(
                 counterparty_lp_amount.multiply_ratio(matched_ld, counterparty_ld_amount)
-            )?;
+            ).map_err(StdError::overflow)?;
             // counterparty_order.value = new_counterparty_value;
             node_update_value(deps.storage, counterparty_id, new_counterparty_value, new_counterparty_ld_value)?;
         }
         // If no more remaining lp token, the order is fully filled
-        if remain_lp_token == Uint128::zero() {
+        if remain_native_token == Uint128::zero() {
             is_filled = true;
         }
     }
@@ -360,9 +359,8 @@ pub fn execute_swap(
     // update native balance pool
     NATIVE_POOL.update(
         deps.storage,
-        |pool: Option<Uint128>| -> StdResult<_> {
-            Ok(pool.unwrap_or_default()
-                .checked_sub(unclaimed_rewards)?
+        |pool: Uint128| -> StdResult<_> {
+            Ok(pool.checked_sub(unclaimed_rewards)?
                 .checked_sub(order_native_value)?)
         },
     )?;
