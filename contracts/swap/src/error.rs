@@ -6,7 +6,7 @@ use thiserror::Error;
 pub enum ContractError {
     #[error("{0}")]
     Std(#[from] StdError),
-    
+
     #[error("{0}")]
     Payment(#[from] PaymentError),
 
@@ -26,10 +26,10 @@ pub enum ContractError {
 
     #[error("Not enough liquidity to swap")]
     InsufficientLiquidity{},
-    
+
     #[error("User adds zero lp token")]
     NothingToAdd {},
-    
+
     #[error("User get no native token when swapping")]
     GainNothingWhenSwap {},
 

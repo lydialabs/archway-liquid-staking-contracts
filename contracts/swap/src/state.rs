@@ -34,4 +34,4 @@ pub const CLAIMABLE: Map<&Addr, Uint128> = Map::new("claimable");
 // native token
 pub const UNCLAIMED: Map<&Addr, Uint128> = Map::new("unclaimed");
 pub const QUEUE_ID: Map<&Addr, u64> = Map::new("queue_id");
-pub const NATIVE_POOL: Item<Uint128> = Item::new("native_pool");
+pub const TOTAL_UNCLAIMED: Item<Uint128> = Item::new("total_unclaimed");

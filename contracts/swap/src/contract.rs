@@ -1,9 +1,6 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{
-    coins, to_binary, Addr, BankMsg, Binary, Decimal, Deps, DepsMut, Env, MessageInfo,
-    QueryRequest, WasmQuery, Response, StdError, StdResult, Uint128,
-};
+use cosmwasm_std::{coins, to_binary, Addr, BankMsg, Binary, Decimal, Deps, DepsMut, Env, MessageInfo, QueryRequest, WasmQuery, Response, StdError, StdResult, Uint128};
 
 use cw2::set_contract_version;
 use cw20::{BalanceResponse, Cw20Contract, Cw20ExecuteMsg, Cw20ReceiveMsg,
@@ -16,7 +13,7 @@ use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, ConfigResponse, StatusResponse, InstantiateMsg, QueryMsg,
     OrderInfoOfResponse, OrderBookResponse, StakingManagerQueryMsg,
     StakingManagerStatusResponse};
-use crate::state::{ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, QUEUE_ID, UNCLAIMED, NATIVE_POOL};
+use crate::state::{ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, QUEUE_ID, UNCLAIMED, TOTAL_UNCLAIMED};
 use cw_utils::{must_pay, nonpayable};
 
 const FALLBACK_RATIO: Decimal = Decimal::one();
@@ -70,7 +67,7 @@ pub fn execute(
     match msg {
         ExecuteMsg::Add {} => execute_add(deps, env, info),
         ExecuteMsg::Remove {} => execute_remove(deps, env, info),
-        ExecuteMsg::Claim {} => execute_claim(deps, info),
+        ExecuteMsg::Claim {} => execute_claim(deps, env, info),
         ExecuteMsg::SetSwapFee { swap_fee } => execute_set_swap_fee(deps, info, swap_fee),
         ExecuteMsg::Receive(msg) => execute_receive(deps, env, info, msg),
     }
@@ -84,6 +81,13 @@ fn get_ratio(numerator: Uint128, denominator: Uint128) -> Decimal {
     }
 }
 
+fn get_cur_native(deps: &DepsMut, env: Env, denom: &str) -> Result<Uint128, StdError> {
+    deps.querier
+        .query_balance(&env.contract.address, denom)?.amount
+        .checked_sub(TOTAL_UNCLAIMED.may_load(deps.storage)?.unwrap_or_default())
+        .map_err(StdError::overflow)
+}
+
 pub fn execute_add(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, ContractError> {
     // ensure we have the proper denom
     let config = CONFIG.load(deps.storage)?;
@@ -91,7 +95,7 @@ pub fn execute_add(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respons
     let payment = must_pay(&info, &config.bond_denom)?;
 
     let mut supply = TOTAL_SUPPLY.load(deps.storage)?;
-    let mut cur_native = NATIVE_POOL.load(deps.storage)?;
+    let mut cur_native = get_cur_native(&deps, env.clone(), &config.bond_denom)?;
     let mut res = Response::new();
     // withdraw all native token from contract when there is no lp token in the pool
     if !cur_native.is_zero() && supply.issued.is_zero() {
@@ -109,10 +113,6 @@ pub fn execute_add(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respons
     // update supply info
     supply.issued += new_node_value;
     TOTAL_SUPPLY.save(deps.storage, &supply)?;
-    NATIVE_POOL.update(
-        deps.storage,
-        |total: Uint128| -> StdResult<_> { Ok(total + payment) },
-    )?;
     // update node id of user in the queue
     let old_node_id = QUEUE_ID.may_load(deps.storage, &info.sender)?.unwrap_or_default();
     if old_node_id > 0 {
@@ -131,7 +131,7 @@ pub fn execute_add(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respons
     Ok(res)
 }
 
-pub fn execute_remove(deps: DepsMut, _env: Env, info: MessageInfo) -> Result<Response, ContractError> {
+pub fn execute_remove(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Response, ContractError> {
     nonpayable(&info)?;
 
     // ensure we have the proper denom
@@ -146,7 +146,7 @@ pub fn execute_remove(deps: DepsMut, _env: Env, info: MessageInfo) -> Result<Res
     let cur_node = node_read(deps.storage).load(node_key)?;
     linked_list_remove(deps.storage, node_id)?;
     QUEUE_ID.save(deps.storage, &info.sender, &0)?;
-    let balance = NATIVE_POOL.load(deps.storage)?;
+    let balance = get_cur_native(&deps, env, &config.bond_denom)?;
     let mut supply = TOTAL_SUPPLY.load(deps.storage)?;
     let native_amount = cur_node.value.multiply_ratio(balance, supply.issued);
     if native_amount.is_zero() {
@@ -154,7 +154,6 @@ pub fn execute_remove(deps: DepsMut, _env: Env, info: MessageInfo) -> Result<Res
     }
     supply.issued = supply.issued.checked_sub(cur_node.value).map_err(StdError::overflow)?;
     TOTAL_SUPPLY.save(deps.storage, &supply)?;
-    NATIVE_POOL.save(deps.storage, &balance.checked_sub(native_amount).map_err(StdError::overflow)?)?;
 
     // transfer tokens to the sender
     let res = Response::new()
@@ -171,6 +170,7 @@ pub fn execute_remove(deps: DepsMut, _env: Env, info: MessageInfo) -> Result<Res
 
 pub fn execute_claim(
     deps: DepsMut,
+    env: Env,
     info: MessageInfo,
 ) -> Result<Response, ContractError> {
     nonpayable(&info)?;
@@ -199,21 +199,25 @@ pub fn execute_claim(
     let mut unclaimed = UNCLAIMED.may_load(deps.storage, &info.sender)?.unwrap_or_default();
     if unclaimed.u128() > 0 {
         UNCLAIMED.save(deps.storage, &info.sender, &Uint128::zero())?;
+        TOTAL_UNCLAIMED.update(
+            deps.storage,
+            |total_unclaimed: Uint128| -> StdResult<_> {
+                Ok(total_unclaimed.checked_sub(unclaimed)?)
+            },
+        )?;
     }
     // query current rewards
     let position = QUEUE_ID.may_load(deps.storage, &info.sender)?.unwrap_or_default();
     if position > 0 {
         let position_key = &position.to_be_bytes();
         let position_node = node_read(deps.storage).load(position_key)?;
-        let balance = NATIVE_POOL.load(deps.storage)?;
+        let balance = get_cur_native(&deps, env, &config.bond_denom)?;
         let supply = TOTAL_SUPPLY.load(deps.storage)?.issued;
         let rewards_lp = position_node.value.
             checked_sub(position_node.last_deposit * get_ratio(supply, balance))
             .map_err(StdError::overflow)?;
         if rewards_lp.u128() > 0 {
-            let unclaimed_position = rewards_lp * get_ratio(balance, supply);
-            unclaimed += unclaimed_position;
-            NATIVE_POOL.save(deps.storage, &balance.checked_sub(unclaimed_position).map_err(StdError::overflow)?)?;
+            unclaimed += rewards_lp * get_ratio(balance, supply);
             TOTAL_SUPPLY.update(deps.storage, |mut supply| -> StdResult<_> {
                 supply.issued = supply.issued.checked_sub(rewards_lp)?;
                 Ok(supply)
@@ -269,7 +273,7 @@ pub fn execute_receive(
 
 pub fn execute_swap(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     sender: Addr,
     amount: Uint128,
 ) -> Result<Response, ContractError> {
@@ -288,7 +292,7 @@ pub fn execute_swap(
     if order_native_value.is_zero() {
         return Err(ContractError::GainNothingWhenSwap {});
     }
-    let balance = NATIVE_POOL.load(deps.storage)?;
+    let balance = get_cur_native(&deps, env, &config.bond_denom)?;
     let mut supply = TOTAL_SUPPLY.load(deps.storage)?;
     let order_lp_token_value = order_native_value * get_ratio(supply.issued, balance);
     if order_lp_token_value > supply.issued {
@@ -327,7 +331,7 @@ pub fn execute_swap(
             &counterparty_address,
             |claimable: Option<Uint128>| -> StdResult<_> { Ok(claimable.unwrap_or_default() + liquid_token_earning) },
         )?;
-        // calculate portion rewards of total swapped and accrue for user to claim late
+        // calculate portion rewards of total swapped and accrue for user to claim later
         // formula: (token_swapped /last_deposit) * (staked_token * ratio - last_deposit)
         let reward_portion = ((counterparty_lp_amount * get_ratio(supply.issued, balance))
             .checked_sub(matched_ld)).map_err(StdError::overflow)?
@@ -356,12 +360,11 @@ pub fn execute_swap(
         }
     }
 
-    // update native balance pool
-    NATIVE_POOL.update(
+    // update total unclaimed
+    TOTAL_UNCLAIMED.update(
         deps.storage,
-        |pool: Uint128| -> StdResult<_> {
-            Ok(pool.checked_sub(unclaimed_rewards)?
-                .checked_sub(order_native_value)?)
+        |total_unclaimed: Uint128| -> StdResult<_> {
+            Ok(total_unclaimed.checked_add(unclaimed_rewards)?)
         },
     )?;
 
