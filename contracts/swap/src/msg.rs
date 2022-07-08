@@ -17,7 +17,7 @@ pub struct InstantiateMsg {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecuteMsg {
-    /// Add is called along with native tokens to add liquidity to the swap pool 
+    /// Add is called along with native tokens to add liquidity to the swap pool
     Add {},
     /// Remove is used to remove liquidity provider from the pool and receive native token
     Remove {},
@@ -42,7 +42,7 @@ pub enum QueryMsg {
     StatusInfo {},
     /// Order book shows first 50 order in the swapping queue of the contract
     OrderBook {},
-    /// OrderInfoOf shows status of the liquidity pool deposit of the address 
+    /// OrderInfoOf shows status of the liquidity pool deposit of the address
     OrderInfoOf { address: String },
 }
 
@@ -74,7 +74,7 @@ pub struct StatusResponse {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct OrderInfoOfResponse {
-    /// issued is how many derivative tokens in the pool this address has 
+    /// issued is how many derivative tokens in the pool this address has
     pub issued: Uint128,
     /// native is how many native tokens in the pool this address has
     pub native: Uint128,
@@ -113,4 +113,10 @@ pub struct StakingManagerStatusResponse {
     pub balance: Uint128,
     /// ratio of native / issued (or how many native tokens that one derivative token is nominally worth)
     pub ratio: Decimal,
+}
+
+#[derive(Serialize, Deserialize, Clone, PartialEq, JsonSchema, Debug)]
+pub struct RewardsResponse {
+    pub staked_token: Uint128,
+    pub native_token: Uint128,
 }

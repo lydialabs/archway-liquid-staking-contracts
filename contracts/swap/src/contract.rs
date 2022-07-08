@@ -3,16 +3,13 @@ use cosmwasm_std::entry_point;
 use cosmwasm_std::{coins, to_binary, Addr, BankMsg, Binary, Decimal, Deps, DepsMut, Env, MessageInfo, QueryRequest, WasmQuery, Response, StdError, StdResult, Uint128};
 
 use cw2::set_contract_version;
-use cw20::{BalanceResponse, Cw20Contract, Cw20ExecuteMsg, Cw20ReceiveMsg,
-    };
+use cw20::{Cw20Contract, Cw20ExecuteMsg, Cw20ReceiveMsg};
 
 use crate::linked_list::{LinkedList, NodeWithId, node_read, node_update_value,
     linked_list, linked_list_read, linked_list_append, linked_list_remove_head,
     linked_list_remove, linked_list_get_list};
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, ConfigResponse, StatusResponse, InstantiateMsg, QueryMsg,
-    OrderInfoOfResponse, OrderBookResponse, StakingManagerQueryMsg,
-    StakingManagerStatusResponse};
+use crate::msg::{ExecuteMsg, ConfigResponse, StatusResponse, InstantiateMsg, QueryMsg, OrderInfoOfResponse, OrderBookResponse, StakingManagerQueryMsg, StakingManagerStatusResponse, RewardsResponse};
 use crate::state::{ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, QUEUE_ID, UNCLAIMED, TOTAL_UNCLAIMED};
 use cw_utils::{must_pay, nonpayable};
 
@@ -81,7 +78,7 @@ fn get_ratio(numerator: Uint128, denominator: Uint128) -> Decimal {
     }
 }
 
-fn get_cur_native(deps: &DepsMut, env: Env, denom: &str) -> Result<Uint128, StdError> {
+fn get_cur_native(deps: &Deps, env: Env, denom: &str) -> Result<Uint128, StdError> {
     deps.querier
         .query_balance(&env.contract.address, denom)?.amount
         .checked_sub(TOTAL_UNCLAIMED.may_load(deps.storage)?.unwrap_or_default())
@@ -95,7 +92,7 @@ pub fn execute_add(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respons
     let payment = must_pay(&info, &config.bond_denom)?;
 
     let mut supply = TOTAL_SUPPLY.load(deps.storage)?;
-    let mut cur_native = get_cur_native(&deps, env.clone(), &config.bond_denom)?;
+    let mut cur_native = get_cur_native(&deps.as_ref(), env.clone(), &config.bond_denom)?;
     let mut res = Response::new();
     // withdraw all native token from contract when there is no lp token in the pool
     if !cur_native.is_zero() && supply.issued.is_zero() {
@@ -146,7 +143,7 @@ pub fn execute_remove(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Resp
     let cur_node = node_read(deps.storage).load(node_key)?;
     linked_list_remove(deps.storage, node_id)?;
     QUEUE_ID.save(deps.storage, &info.sender, &0)?;
-    let balance = get_cur_native(&deps, env, &config.bond_denom)?;
+    let balance = get_cur_native(&deps.as_ref(), env, &config.bond_denom)?;
     let mut supply = TOTAL_SUPPLY.load(deps.storage)?;
     let native_amount = cur_node.value.multiply_ratio(balance, supply.issued);
     if native_amount.is_zero() {
@@ -211,7 +208,7 @@ pub fn execute_claim(
     if position > 0 {
         let position_key = &position.to_be_bytes();
         let position_node = node_read(deps.storage).load(position_key)?;
-        let balance = get_cur_native(&deps, env, &config.bond_denom)?;
+        let balance = get_cur_native(&deps.as_ref(), env, &config.bond_denom)?;
         let supply = TOTAL_SUPPLY.load(deps.storage)?.issued;
         let rewards_lp = position_node.value.
             checked_sub(position_node.last_deposit * get_ratio(supply, balance))
@@ -292,7 +289,7 @@ pub fn execute_swap(
     if order_native_value.is_zero() {
         return Err(ContractError::GainNothingWhenSwap {});
     }
-    let balance = get_cur_native(&deps, env, &config.bond_denom)?;
+    let balance = get_cur_native(&deps.as_ref(), env, &config.bond_denom)?;
     let mut supply = TOTAL_SUPPLY.load(deps.storage)?;
     let order_lp_token_value = order_native_value * get_ratio(supply.issued, balance);
     if order_lp_token_value > supply.issued {
@@ -406,7 +403,7 @@ pub fn execute_set_swap_fee(
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::ClaimableOf { address } => {
-            to_binary(&query_claimable_of(deps, address)?)
+            to_binary(&query_claimable_of(deps, _env, address)?)
         },
         QueryMsg::ConfigInfo {} => to_binary(&query_config(deps)?),
         QueryMsg::StatusInfo {} => to_binary(&query_status(deps, _env)?),
@@ -417,12 +414,26 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     }
 }
 
-pub fn query_claimable_of(deps: Deps, address: String) -> StdResult<BalanceResponse> {
+pub fn query_claimable_of(deps: Deps, env: Env, address: String) -> StdResult<RewardsResponse> {
     let address = deps.api.addr_validate(&address)?;
+    let config = CONFIG.load(deps.storage)?;
     let claimable = CLAIMABLE
         .may_load(deps.storage, &address)?
         .unwrap_or_default();
-    Ok(BalanceResponse { balance: claimable })
+    let mut unclaimed = UNCLAIMED
+        .may_load(deps.storage, &address)?
+        .unwrap_or_default();
+    let position = QUEUE_ID.may_load(deps.storage, &address)?.unwrap_or_default();
+    if position > 0 {
+        let position_node = node_read(deps.storage).load(&position.to_be_bytes())?;
+        let balance = get_cur_native(&deps, env, &config.bond_denom)?;
+        let supply = TOTAL_SUPPLY.load(deps.storage)?.issued;
+        let rewards_lp = position_node.value.
+            checked_sub(position_node.last_deposit * get_ratio(supply, balance))
+            .map_err(StdError::overflow)?;
+        unclaimed += rewards_lp * get_ratio(balance, supply);
+    }
+    Ok(RewardsResponse { staked_token: claimable, native_token: unclaimed })
 }
 
 pub fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
