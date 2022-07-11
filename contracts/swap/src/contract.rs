@@ -299,7 +299,7 @@ pub fn execute_swap(
     supply.claims += amount;
     TOTAL_SUPPLY.save(deps.storage, &supply)?;
 
-    let mut unclaimed_rewards = Uint128::new(0);
+    let mut unclaimed_rewards = Uint128::zero();
     let mut is_filled = false;
     let mut remain_native_token = order_native_value;
     while !is_filled {
