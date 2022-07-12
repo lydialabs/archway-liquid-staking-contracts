@@ -14,6 +14,7 @@ static LINKED_LIST_KEY: &[u8] = b"linked_list";
 pub struct Node {
     pub receiver: Addr,
     pub value: Uint128,
+    pub last_deposit: Uint128,
     pub height: u64,
     pub prev: u64,
     pub next: u64,
@@ -50,22 +51,25 @@ pub fn node_read(storage: &dyn Storage) -> ReadonlyBucket<Node> {
 }
 
 pub fn node_update_value(
-    storage: &mut dyn Storage, 
-    node_id: u64, 
-    value: Uint128
+    storage: &mut dyn Storage,
+    node_id: u64,
+    value: Uint128,
+    last_deposit: Uint128,
 ) -> StdResult<()> {
     let node_key = &node_id.to_be_bytes();
     let mut cur_node = node(storage).load(node_key)?;
     cur_node.value = value;
+    cur_node.last_deposit = last_deposit;
     node(storage).save(node_key, &cur_node)?;
-    
+
     Ok(())
 }
 
 pub fn linked_list_append(
-    storage: &mut dyn Storage, 
-    receiver: Addr, 
-    value: Uint128, 
+    storage: &mut dyn Storage,
+    receiver: Addr,
+    value: Uint128,
+    last_deposit: Uint128,
     height: u64
 ) -> StdResult<u64> {
     let mut state = linked_list(storage).load()?;
@@ -85,9 +89,10 @@ pub fn linked_list_append(
 
     // create new node
     let new_node = Node {
-        receiver: receiver,
-        value: value,
-        height: height,
+        receiver,
+        value,
+        height,
+        last_deposit,
         prev: new_node_prev,
         next: 0,
     };
@@ -121,7 +126,7 @@ pub fn linked_list_clear(storage: &mut dyn Storage) -> StdResult<()> {
     }
     // delete the last node
     node(storage).remove(&cur_id.to_be_bytes());
-    
+
     state.tail_id = 0;
     state.head_id = 0;
     state.length = 0;
@@ -148,7 +153,7 @@ pub fn linked_list_remove_head(storage: &mut dyn Storage) -> StdResult<()> {
         node(storage).save(new_head_key, &new_head)?;
         linked_list(storage).save(&state)?;
     }
-    
+
     Ok(())
 }
 
@@ -170,7 +175,7 @@ pub fn linked_list_remove_tail(storage: &mut dyn Storage) -> StdResult<()> {
         node(storage).save(new_tail_key, &new_tail)?;
         linked_list(storage).save(&state)?;
     }
-    
+
     Ok(())
 }
 
@@ -194,7 +199,7 @@ pub fn linked_list_remove(storage: &mut dyn Storage, node_id: u64) -> StdResult<
         node(storage).save(cur_prev_node_key, &cur_prev_node)?;
         node(storage).save(cur_next_node_key, &cur_next_node)?;
     }
-    
+
     Ok(())
 }
 
@@ -214,7 +219,7 @@ pub fn linked_list_get_list(storage: &dyn Storage, _count: u64) -> StdResult<Vec
             index += 1;
         }
     }
-    
+
     return Ok(queue_list);
 }
 
