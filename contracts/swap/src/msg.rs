@@ -68,6 +68,8 @@ pub struct StatusResponse {
     pub claims: Uint128,
     /// available native token balance of this contract
     pub balance: Uint128,
+    /// available native token balance to claim
+    pub unclaimed_balance: Uint128,
     /// ratio of balance / issued (or how many native tokens that one derivative token is nominally worth)
     pub ratio: Decimal,
 }
@@ -82,6 +84,8 @@ pub struct OrderInfoOfResponse {
     pub height: u64,
     /// node_id is the id of adddress order in the linked-list
     pub node_id: u64,
+    /// last deposit
+    pub last_deposit: Uint128,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

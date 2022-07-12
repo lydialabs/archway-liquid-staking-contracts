@@ -25,6 +25,8 @@ pub struct Supply {
     pub issued: Uint128,
     /// claims is how many tokens need to be reserved paying back those who unbonded
     pub claims: Uint128,
+    /// total unclaimed
+    pub total_unclaimed: Uint128,
 }
 
 pub const CONFIG: Item<ConfigInfo> = Item::new("config");
@@ -34,4 +36,3 @@ pub const CLAIMABLE: Map<&Addr, Uint128> = Map::new("claimable");
 // native token
 pub const UNCLAIMED: Map<&Addr, Uint128> = Map::new("unclaimed");
 pub const QUEUE_ID: Map<&Addr, u64> = Map::new("queue_id");
-pub const TOTAL_UNCLAIMED: Item<Uint128> = Item::new("total_unclaimed");

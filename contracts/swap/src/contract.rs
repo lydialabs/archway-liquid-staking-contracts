@@ -10,7 +10,7 @@ use crate::linked_list::{LinkedList, NodeWithId, node_read, node_update_value,
     linked_list_remove, linked_list_get_list};
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, ConfigResponse, StatusResponse, InstantiateMsg, QueryMsg, OrderInfoOfResponse, OrderBookResponse, StakingManagerQueryMsg, StakingManagerStatusResponse, RewardsResponse};
-use crate::state::{ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, QUEUE_ID, UNCLAIMED, TOTAL_UNCLAIMED};
+use crate::state::{ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, QUEUE_ID, UNCLAIMED};
 use cw_utils::{must_pay, nonpayable};
 
 const FALLBACK_RATIO: Decimal = Decimal::one();
@@ -81,7 +81,7 @@ fn get_ratio(numerator: Uint128, denominator: Uint128) -> Decimal {
 fn get_cur_native(deps: &Deps, env: Env, denom: &str) -> Result<Uint128, StdError> {
     deps.querier
         .query_balance(&env.contract.address, denom)?.amount
-        .checked_sub(TOTAL_UNCLAIMED.may_load(deps.storage)?.unwrap_or_default())
+        .checked_sub(TOTAL_SUPPLY.load(deps.storage)?.total_unclaimed)
         .map_err(StdError::overflow)
 }
 
@@ -92,7 +92,8 @@ pub fn execute_add(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respons
     let payment = must_pay(&info, &config.bond_denom)?;
 
     let mut supply = TOTAL_SUPPLY.load(deps.storage)?;
-    let mut cur_native = get_cur_native(&deps.as_ref(), env.clone(), &config.bond_denom)?;
+    let mut cur_native = get_cur_native(&deps.as_ref(), env.clone(), &config.bond_denom)?
+        .checked_sub(payment).map_err(StdError::overflow)?;
     let mut res = Response::new();
     // withdraw all native token from contract when there is no lp token in the pool
     if !cur_native.is_zero() && supply.issued.is_zero() {
@@ -172,37 +173,26 @@ pub fn execute_claim(
 ) -> Result<Response, ContractError> {
     nonpayable(&info)?;
 
+    let mut res = Response::new();
     let config = CONFIG.load(deps.storage)?;
     let to_send = CLAIMABLE.may_load(deps.storage, &info.sender)?.unwrap_or_default();
-    if to_send == Uint128::zero() {
-        return Err(ContractError::NothingToClaim {});
+    if to_send.u128() > 0 {
+        CLAIMABLE.save(deps.storage, &info.sender, &Uint128::zero())?;
+        TOTAL_SUPPLY.update(deps.storage, |mut supply| -> StdResult<_> {
+            supply.claims = supply.claims.checked_sub(to_send)?;
+            Ok(supply)
+        })?;
+
+        // transfer liquid token
+        let cw20 = Cw20Contract(config.liquid_token_addr);
+        // Build a cw20 transfer send msg, that send collected funds to target address
+        res = res.add_message( cw20.call(Cw20ExecuteMsg::Transfer {
+            recipient: info.sender.to_string(),
+            amount: to_send,
+        })?);
     }
-    CLAIMABLE.save(deps.storage, &info.sender, &Uint128::zero())?;
 
-    TOTAL_SUPPLY.update(deps.storage, |mut supply| -> StdResult<_> {
-        supply.claims = supply.claims.checked_sub(to_send)?;
-        Ok(supply)
-    })?;
-
-    // transfer liquid token
-    let cw20 = Cw20Contract(config.liquid_token_addr);
-    // Build a cw20 transfer send msg, that send collected funds to target address
-    let msg = cw20.call(Cw20ExecuteMsg::Transfer {
-        recipient: info.sender.to_string(),
-        amount: to_send,
-    })?;
-
-    let mut res = Response::new();
-    let mut unclaimed = UNCLAIMED.may_load(deps.storage, &info.sender)?.unwrap_or_default();
-    if unclaimed.u128() > 0 {
-        UNCLAIMED.save(deps.storage, &info.sender, &Uint128::zero())?;
-        TOTAL_UNCLAIMED.update(
-            deps.storage,
-            |total_unclaimed: Uint128| -> StdResult<_> {
-                Ok(total_unclaimed.checked_sub(unclaimed)?)
-            },
-        )?;
-    }
+    let mut unclaimed = Uint128::zero();
     // query current rewards
     let position = QUEUE_ID.may_load(deps.storage, &info.sender)?.unwrap_or_default();
     if position > 0 {
@@ -210,8 +200,8 @@ pub fn execute_claim(
         let position_node = node_read(deps.storage).load(position_key)?;
         let balance = get_cur_native(&deps.as_ref(), env, &config.bond_denom)?;
         let supply = TOTAL_SUPPLY.load(deps.storage)?.issued;
-        let rewards_lp = position_node.value.
-            checked_sub(position_node.last_deposit * get_ratio(supply, balance))
+        let rewards_lp = (position_node.last_deposit * get_ratio(supply, balance))
+            .checked_sub(position_node.value)
             .map_err(StdError::overflow)?;
         if rewards_lp.u128() > 0 {
             unclaimed += rewards_lp * get_ratio(balance, supply);
@@ -230,6 +220,16 @@ pub fn execute_claim(
         }
     }
 
+    let amount_unclaimed = UNCLAIMED.may_load(deps.storage, &info.sender)?.unwrap_or_default();
+    if amount_unclaimed.u128() > 0 {
+        unclaimed += amount_unclaimed;
+        UNCLAIMED.save(deps.storage, &info.sender, &Uint128::zero())?;
+        TOTAL_SUPPLY.update(deps.storage, |mut supply| -> StdResult<_> {
+            supply.total_unclaimed = supply.total_unclaimed.checked_sub(amount_unclaimed)?;
+            Ok(supply)
+        })?;
+    }
+
     // transfer unclaimed rewards
     if unclaimed.u128() > 0 {
         res = res.add_message(BankMsg::Send {
@@ -239,7 +239,7 @@ pub fn execute_claim(
     }
 
     // transfer tokens to the sender
-    res = res.add_message(msg)
+    res = res
         .add_attribute("action", "claim")
         .add_attribute("from", info.sender)
         .add_attribute("amount", to_send);
@@ -297,7 +297,6 @@ pub fn execute_swap(
     }
     supply.issued = supply.issued.checked_sub(order_lp_token_value).map_err(StdError::overflow)?;
     supply.claims += amount;
-    TOTAL_SUPPLY.save(deps.storage, &supply)?;
 
     let mut unclaimed_rewards = Uint128::zero();
     let mut is_filled = false;
@@ -358,12 +357,8 @@ pub fn execute_swap(
     }
 
     // update total unclaimed
-    TOTAL_UNCLAIMED.update(
-        deps.storage,
-        |total_unclaimed: Uint128| -> StdResult<_> {
-            Ok(total_unclaimed.checked_add(unclaimed_rewards)?)
-        },
-    )?;
+    supply.total_unclaimed += unclaimed_rewards;
+    TOTAL_SUPPLY.save(deps.storage, &supply)?;
 
     // transfer native tokens to the sender
     let res = Response::new()
@@ -428,8 +423,8 @@ pub fn query_claimable_of(deps: Deps, env: Env, address: String) -> StdResult<Re
         let position_node = node_read(deps.storage).load(&position.to_be_bytes())?;
         let balance = get_cur_native(&deps, env, &config.bond_denom)?;
         let supply = TOTAL_SUPPLY.load(deps.storage)?.issued;
-        let rewards_lp = position_node.value.
-            checked_sub(position_node.last_deposit * get_ratio(supply, balance))
+        let rewards_lp = (position_node.last_deposit * get_ratio(supply, balance)).
+            checked_sub(position_node.value)
             .map_err(StdError::overflow)?;
         unclaimed += rewards_lp * get_ratio(balance, supply);
     }
@@ -461,6 +456,7 @@ pub fn query_status(deps: Deps, _env: Env) -> StdResult<StatusResponse> {
         issued: supply.issued,
         claims: supply.claims,
         balance: balance.amount,
+        unclaimed_balance: supply.total_unclaimed,
         ratio: get_ratio(balance.amount, supply.issued),
     };
     Ok(res)
@@ -480,15 +476,17 @@ pub fn query_order_info_of(deps: Deps, _env: Env, address: String) -> StdResult<
         .unwrap_or_default();
     let mut issued = Uint128::zero();
     let mut height = 0;
+    let mut last_deposit = Uint128::zero();
     if node_id > 0 {
         let node_key = &node_id.to_be_bytes();
         let cur_node = node_read(deps.storage).load(node_key)?;
         issued = cur_node.value;
         height = cur_node.height;
+        last_deposit = cur_node.last_deposit;
     }
     let native = issued * get_ratio(balance.amount, supply.issued);
 
-    Ok(OrderInfoOfResponse { issued, native, height, node_id})
+    Ok(OrderInfoOfResponse { issued, native, height, node_id, last_deposit})
 }
 
 pub fn query_order_book(deps: Deps) -> StdResult<OrderBookResponse> {
