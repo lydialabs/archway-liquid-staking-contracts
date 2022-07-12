@@ -200,11 +200,11 @@ pub fn execute_claim(
         let position_node = node_read(deps.storage).load(position_key)?;
         let balance = get_cur_native(&deps.as_ref(), env, &config.bond_denom)?;
         let supply = TOTAL_SUPPLY.load(deps.storage)?.issued;
-        let rewards_lp = (position_node.last_deposit * get_ratio(supply, balance))
-            .checked_sub(position_node.value)
-            .map_err(StdError::overflow)?;
-        if rewards_lp.u128() > 0 {
-            unclaimed += rewards_lp * get_ratio(balance, supply);
+        let rewards = (position_node.value * get_ratio(balance, supply))
+            .checked_sub(position_node.last_deposit).unwrap_or_default();
+        if rewards.u128() > 0 {
+            unclaimed += rewards;
+            let rewards_lp = rewards * get_ratio(supply, balance);
             TOTAL_SUPPLY.update(deps.storage, |mut supply| -> StdResult<_> {
                 supply.issued = supply.issued.checked_sub(rewards_lp)?;
                 Ok(supply)
@@ -295,7 +295,6 @@ pub fn execute_swap(
     if order_lp_token_value > supply.issued {
         return Err(ContractError::InsufficientLiquidity {});
     }
-    supply.issued = supply.issued.checked_sub(order_lp_token_value).map_err(StdError::overflow)?;
     supply.claims += amount;
 
     let mut unclaimed_rewards = Uint128::zero();
@@ -330,15 +329,16 @@ pub fn execute_swap(
         // calculate portion rewards of total swapped and accrue for user to claim later
         // formula: (token_swapped /last_deposit) * (staked_token * ratio - last_deposit)
         let reward_portion = ((counterparty_lp_amount * get_ratio(supply.issued, balance))
-            .checked_sub(matched_ld)).map_err(StdError::overflow)?
+            .checked_sub(counterparty_ld_amount)).map_err(StdError::overflow)?
             .multiply_ratio(matched_ld, counterparty_ld_amount);
-        unclaimed_rewards = unclaimed_rewards.checked_add(reward_portion).map_err(StdError::overflow)?;
-        UNCLAIMED.update(
-            deps.storage,
-            &counterparty_address,
-            |unclaimed: Option<Uint128>| -> StdResult<_> { Ok(unclaimed.unwrap_or_default() + reward_portion) },
-        )?;
-
+        if reward_portion.u128() > 0 {
+            unclaimed_rewards = unclaimed_rewards.checked_add(reward_portion).map_err(StdError::overflow)?;
+            UNCLAIMED.update(
+                deps.storage,
+                &counterparty_address,
+                |unclaimed: Option<Uint128>| -> StdResult<_> { Ok(unclaimed.unwrap_or_default() + reward_portion) },
+            )?;
+        }
         if counterparty_filled {
             linked_list_remove_head(deps.storage)?;
             QUEUE_ID.save(deps.storage, &counterparty_address, &0)?;
@@ -357,6 +357,7 @@ pub fn execute_swap(
     }
 
     // update total unclaimed
+    supply.issued = supply.issued.checked_sub(order_lp_token_value).map_err(StdError::overflow)?;
     supply.total_unclaimed += unclaimed_rewards;
     TOTAL_SUPPLY.save(deps.storage, &supply)?;
 
@@ -423,10 +424,8 @@ pub fn query_claimable_of(deps: Deps, env: Env, address: String) -> StdResult<Re
         let position_node = node_read(deps.storage).load(&position.to_be_bytes())?;
         let balance = get_cur_native(&deps, env, &config.bond_denom)?;
         let supply = TOTAL_SUPPLY.load(deps.storage)?.issued;
-        let rewards_lp = (position_node.last_deposit * get_ratio(supply, balance)).
-            checked_sub(position_node.value)
-            .map_err(StdError::overflow)?;
-        unclaimed += rewards_lp * get_ratio(balance, supply);
+        unclaimed += (position_node.value * get_ratio(balance, supply))
+            .checked_sub(position_node.last_deposit).unwrap_or_default();
     }
     Ok(RewardsResponse { staked_token: claimable, native_token: unclaimed })
 }
@@ -448,9 +447,7 @@ pub fn query_status(deps: Deps, _env: Env) -> StdResult<StatusResponse> {
     let config = CONFIG.load(deps.storage)?;
     let supply = TOTAL_SUPPLY.load(deps.storage)?;
 
-    let balance = deps
-        .querier
-        .query_balance(&_env.contract.address, &config.bond_denom)?;
+    let balance = get_cur_native(&deps.as_ref(), env.clone(), &config.bond_denom)?;
 
     let res = StatusResponse {
         issued: supply.issued,
