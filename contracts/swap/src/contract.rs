@@ -443,18 +443,18 @@ pub fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
     Ok(res)
 }
 
-pub fn query_status(deps: Deps, _env: Env) -> StdResult<StatusResponse> {
+pub fn query_status(deps: Deps, env: Env) -> StdResult<StatusResponse> {
     let config = CONFIG.load(deps.storage)?;
     let supply = TOTAL_SUPPLY.load(deps.storage)?;
 
-    let balance = get_cur_native(&deps.as_ref(), env.clone(), &config.bond_denom)?;
+    let balance = get_cur_native(&deps, env.clone(), &config.bond_denom)?;
 
     let res = StatusResponse {
         issued: supply.issued,
         claims: supply.claims,
-        balance: balance.amount,
+        balance,
         unclaimed_balance: supply.total_unclaimed,
-        ratio: get_ratio(balance.amount, supply.issued),
+        ratio: get_ratio(balance, supply.issued),
     };
     Ok(res)
 }
