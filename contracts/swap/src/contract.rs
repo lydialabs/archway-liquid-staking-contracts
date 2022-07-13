@@ -328,7 +328,7 @@ pub fn execute_swap(
         )?;
         // calculate portion rewards of total swapped and accrue for user to claim later
         // formula: (token_swapped /last_deposit) * (staked_token * ratio - last_deposit)
-        let reward_portion = ((counterparty_lp_amount * get_ratio(supply.issued, balance))
+        let reward_portion = ((counterparty_lp_amount * get_ratio(balance, supply.issued))
             .checked_sub(counterparty_ld_amount)).map_err(StdError::overflow)?
             .multiply_ratio(matched_ld, counterparty_ld_amount);
         if reward_portion.u128() > 0 {
