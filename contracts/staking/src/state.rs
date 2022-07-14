@@ -2,6 +2,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use cosmwasm_std::{Addr, Uint128};
+use cw0::Expiration;
 use cw_storage_plus::{Item, Map};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -15,6 +16,10 @@ pub struct ConfigInfo {
     /// All tokens are bonded to this validator
     /// FIXME: address validation doesn't work for validator addresses
     pub validator: String,
+    /// The number of block between each contract unstaking request
+    pub unstaking_time: u64,
+    /// Contract only unstake after this 
+    pub unstaking_period: Expiration,
 }
 
 /// Supply is dynamic and tracks the current supply of staked and ERC20 tokens.
