@@ -5,6 +5,12 @@ use cosmwasm_std::{Addr, Uint128};
 use cw_storage_plus::{Item, Map};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct Delegation {
+    pub validator: String,
+    pub percentage: u16,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct ConfigInfo {
     /// Admin to change config
     pub owner: Addr,
@@ -12,9 +18,8 @@ pub struct ConfigInfo {
     pub bond_denom: String,
     /// Liquid token address
     pub liquid_token_addr: Addr,
-    /// All tokens are bonded to this validator
-    /// FIXME: address validation doesn't work for validator addresses
-    pub validator: String,
+    /// Delegations preferences for a whitelist of validators, each validator has a delegation percentage
+    pub delegations: Option<Vec<Delegation>>, 
 }
 
 /// Supply is dynamic and tracks the current supply of staked and ERC20 tokens.

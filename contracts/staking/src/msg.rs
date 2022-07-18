@@ -5,13 +5,12 @@ use cosmwasm_std::{Addr, Uint128, Decimal, Coin};
 use cw20::{Cw20ReceiveMsg};
 
 use crate::linked_list::{NodeWithId, LinkedList};
+use crate::state::{Delegation};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InstantiateMsg {
-    /// This is the liquid token contract address
-    // pub liquid_token_addr: Addr,
-    /// This is the validator that all tokens will be bonded to
-    pub validator: String,
+    /// Delegations preferences for a whitelist of validators, each validator has a delegation percentage
+    pub delegations: Option<Vec<Delegation>>, 
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -23,6 +22,9 @@ pub enum ExecuteMsg {
     Claim {},
     /// Admin call this method to set up liquid token address 
     SetLiquidToken { address: Addr },
+
+    /// Admin call this method to change the whitelist of validators
+    SetDelegations { delegations: Option<Vec<Delegation>> },
 
     /// This accepts a properly-encoded ReceiveMsg from a cw20 contract (to process unstake request)
     Receive(Cw20ReceiveMsg),
@@ -55,9 +57,8 @@ pub struct ConfigResponse {
     pub bond_denom: String,
     /// Liquid token address
     pub liquid_token_addr: String,
-    /// All tokens are bonded to this validator
-    /// FIXME: address validation doesn't work for validator addresses
-    pub validator: String,
+    /// Delegations preferences for a whitelist of validators, each validator has a delegation percentage
+    pub delegations: Option<Vec<Delegation>>, 
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

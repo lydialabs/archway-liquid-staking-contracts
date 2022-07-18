@@ -15,10 +15,11 @@ use crate::linked_list::{LinkedList, NodeWithId, node_update_value, linked_list,
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, ConfigResponse, StatusResponse, UnstakingQueueResponse, 
     InstantiateMsg, QueryMsg};
-use crate::state::{ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, UNDER_UNSTAKING};
+use crate::state::{Delegation, ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, UNDER_UNSTAKING};
 use cw_utils::{must_pay, nonpayable};
 
 const FALLBACK_RATIO: Decimal = Decimal::one();
+const POINTS: u16 = 10000;
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:liquid-staking";
@@ -42,12 +43,25 @@ pub fn instantiate(
     };
     linked_list(deps.storage).save(&linked_list_init)?;
 
+    let mut delegation_whitelist: Option<Vec<Delegation>> = None;
+    if let Some(delegations) = msg.delegations {
+        let mut tmp_wl = vec![];
+        let mut total_percentage = 0u16;
+        for delegation in delegations {
+            deps.api.addr_validate(&delegation.validator)?;
+            total_percentage += delegation.percentage;
+            tmp_wl.push(delegation);
+        }
+        assert_eq!(total_percentage, POINTS);
+        delegation_whitelist = Some(tmp_wl);
+    };
+
     let denom = deps.querier.query_bonded_denom()?;
     let config_init = ConfigInfo {
         owner: info.sender,
         bond_denom: denom,
         liquid_token_addr: Addr::unchecked("none"), // msg.liquid_token_addr,
-        validator: msg.validator,
+        delegations: delegation_whitelist,
     };
     CONFIG.save(deps.storage, &config_init)?;
 
@@ -69,6 +83,7 @@ pub fn execute(
         ExecuteMsg::Stake {} => execute_stake(deps, env, info),
         ExecuteMsg::Claim {} => execute_claim(deps, info),
         ExecuteMsg::SetLiquidToken { address } => execute_set_liquid_token(deps, info, address),
+        ExecuteMsg::SetDelegations { delegations } => execute_set_delegations(deps, info, delegations),
         ExecuteMsg::Receive(msg) => execute_receive(deps, env, info, msg),
         ExecuteMsg::_ProcessToken { balance_before } => _process_token(deps, env, info, balance_before),
         ExecuteMsg::_PerformCheck {} => _perform_check(deps, env, info),
@@ -129,20 +144,39 @@ pub fn _process_token(
     }
     let mut res = Response::new();
     // and bond remain available to the validator
-    if supply.unstakings == zero_balance && balance.amount > zero_balance{
-        res = res.add_message(StakingMsg::Delegate {
-            validator: config.validator,
-            amount: balance.clone(),
-        })
+    if supply.unstakings == zero_balance && balance.amount > zero_balance {
+        if let Some(delegations) = config.delegations {
+            let mut remain_balance = balance.amount.clone();
+            let mut remain_shares = Uint128::from(POINTS);
+            for delegation in delegations {
+                let delegation_amount = remain_balance.multiply_ratio(delegation.percentage, remain_shares);
+                res = res.add_message(StakingMsg::Delegate {
+                    validator: delegation.validator,
+                    amount: coin(delegation_amount.u128(), &config.bond_denom),
+                });
+
+                remain_balance = remain_balance.checked_sub(delegation_amount).map_err(StdError::overflow)?;
+                remain_shares = remain_shares.checked_sub(Uint128::from(delegation.percentage)).map_err(StdError::overflow)?;
+            }
+        }
     } else if supply.unstakings > zero_balance && balance.amount == zero_balance {
         // unbond if not enough available native token to process unstaking
         let bonded = get_bonded(&deps.querier, &env.contract.address)?;
         if bonded > supply.native {
-            let unstake_amount = bonded.checked_sub(supply.native).map_err(StdError::overflow)?;
-            res = res.add_message(StakingMsg::Undelegate {
-                validator: config.validator,
-                amount: coin(unstake_amount.u128(), &config.bond_denom),
-            })
+            if let Some(delegations) = config.delegations {
+                let mut remain_unstake_amount = bonded.checked_sub(supply.native).map_err(StdError::overflow)?;
+                let mut remain_shares = Uint128::from(POINTS);
+                for delegation in delegations {
+                    let unstake_amount = remain_unstake_amount.multiply_ratio(delegation.percentage, remain_shares);
+                    res = res.add_message(StakingMsg::Undelegate {
+                        validator: delegation.validator,
+                        amount: coin(unstake_amount.u128(), &config.bond_denom),
+                    });
+
+                    remain_unstake_amount = remain_unstake_amount.checked_sub(unstake_amount).map_err(StdError::overflow)?;
+                    remain_shares = remain_shares.checked_sub(Uint128::from(delegation.percentage)).map_err(StdError::overflow)?;
+                }
+            }
         }
     }
     TOTAL_SUPPLY.save(deps.storage, &supply)?;
@@ -169,9 +203,13 @@ pub fn _perform_check(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Resp
     // claim staking rewards
     let bonded = get_bonded(&deps.querier, &env.contract.address)?;
     if bonded > Uint128::zero() {
-        res = res.add_message(DistributionMsg::WithdrawDelegatorReward {
-            validator: config.validator,
-        })
+        if let Some(delegations) = config.delegations {
+            for delegation in delegations {
+                res = res.add_message(DistributionMsg::WithdrawDelegatorReward {
+                    validator: delegation.validator,
+                })
+            }
+        }
     }
     // process unstaking queue and available native token
     let msg = to_binary(&ExecuteMsg::_ProcessToken { balance_before })?;
@@ -418,6 +456,52 @@ pub fn execute_set_liquid_token(
     Ok(res)
 }
 
+pub fn execute_set_delegations(
+    deps: DepsMut,
+    info: MessageInfo,
+    delegations: Option<Vec<Delegation>>,
+) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+
+    let config = CONFIG.load(deps.storage)?;
+    // only allow owner to call 
+    if info.sender != config.owner {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    let mut log = String::from('{');
+    let mut delegation_whitelist: Option<Vec<Delegation>> = None;
+        if let Some(delegations) = delegations {
+            let mut tmp_wl = vec![];
+            let mut total_percentage = 0u16;
+            for delegation in delegations {
+                deps.api.addr_validate(&delegation.validator)?;
+                total_percentage += delegation.percentage;
+
+                log.push_str(&delegation.validator);
+                log.push(':');
+                log.push_str(&delegation.percentage.to_string());
+                log.push(',');
+
+                tmp_wl.push(delegation);
+            }
+            assert_eq!(total_percentage, POINTS);
+            log.push('}');
+            delegation_whitelist = Some(tmp_wl);
+        };
+    
+    CONFIG.update(deps.storage, |mut config| -> StdResult<_> {
+        config.delegations = delegation_whitelist.clone();
+        Ok(config)
+    })?;
+
+    let res = Response::new()
+        .add_attribute("action", "setDelegations")
+        .add_attribute("from", info.sender)
+        .add_attribute("delegations", log);
+    Ok(res)
+}
+
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
@@ -448,7 +532,7 @@ pub fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
         owner: config.owner.to_string(),
         bond_denom: config.bond_denom,
         liquid_token_addr: config.liquid_token_addr.to_string(),
-        validator: config.validator,
+        delegations: config.delegations,
     };
     Ok(res)
 }
