@@ -5,7 +5,7 @@ use cosmwasm_std::{Addr, Uint128};
 use cw_storage_plus::{Item, Map};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
-pub struct Delegation {
+pub struct DelegationPercentage {
     pub validator: String,
     pub percentage: u16,
 }
@@ -19,7 +19,7 @@ pub struct ConfigInfo {
     /// Liquid token address
     pub liquid_token_addr: Addr,
     /// Delegations preferences for a whitelist of validators, each validator has a delegation percentage
-    pub delegations: Option<Vec<Delegation>>, 
+    pub delegations: Option<Vec<DelegationPercentage>>, 
 }
 
 /// Supply is dynamic and tracks the current supply of staked and ERC20 tokens.

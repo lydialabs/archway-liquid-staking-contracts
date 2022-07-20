@@ -22,9 +22,10 @@ pub enum ExecuteMsg {
     Claim {},
     /// Admin call this method to set up liquid token address 
     SetLiquidToken { address: Addr },
-
     /// Admin call this method to change the whitelist of validators
     SetDelegations { delegations: Option<Vec<Delegation>> },
+    /// Admin call this method to redelegate all bonded token
+    Redelegate {},
 
     /// This accepts a properly-encoded ReceiveMsg from a cw20 contract (to process unstake request)
     Receive(Cw20ReceiveMsg),

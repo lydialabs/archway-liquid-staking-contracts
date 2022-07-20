@@ -1,4 +1,5 @@
 #[cfg(not(feature = "library"))]
+use std::collections::HashMap;
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
     coin, coins, to_binary, Addr, BankMsg, Binary, Decimal, Deps, DepsMut, 
@@ -15,7 +16,7 @@ use crate::linked_list::{LinkedList, NodeWithId, node_update_value, linked_list,
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, ConfigResponse, StatusResponse, UnstakingQueueResponse, 
     InstantiateMsg, QueryMsg};
-use crate::state::{Delegation, ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, UNDER_UNSTAKING};
+use crate::state::{DelegationPercentage, ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, UNDER_UNSTAKING};
 use cw_utils::{must_pay, nonpayable};
 
 const FALLBACK_RATIO: Decimal = Decimal::one();
@@ -43,7 +44,7 @@ pub fn instantiate(
     };
     linked_list(deps.storage).save(&linked_list_init)?;
 
-    let mut delegation_whitelist: Option<Vec<Delegation>> = None;
+    let mut delegation_whitelist: Option<Vec<DelegationPercentage>> = None;
     if let Some(delegations) = msg.delegations {
         let mut tmp_wl = vec![];
         let mut total_percentage = 0u16;
@@ -84,6 +85,7 @@ pub fn execute(
         ExecuteMsg::Claim {} => execute_claim(deps, info),
         ExecuteMsg::SetLiquidToken { address } => execute_set_liquid_token(deps, info, address),
         ExecuteMsg::SetDelegations { delegations } => execute_set_delegations(deps, info, delegations),
+        ExecuteMsg::Redelegate {} => execute_redelegate(deps, env, info),
         ExecuteMsg::Receive(msg) => execute_receive(deps, env, info, msg),
         ExecuteMsg::_ProcessToken { balance_before } => _process_token(deps, env, info, balance_before),
         ExecuteMsg::_PerformCheck {} => _perform_check(deps, env, info),
@@ -459,7 +461,7 @@ pub fn execute_set_liquid_token(
 pub fn execute_set_delegations(
     deps: DepsMut,
     info: MessageInfo,
-    delegations: Option<Vec<Delegation>>,
+    delegations: Option<Vec<DelegationPercentage>>,
 ) -> Result<Response, ContractError> {
     nonpayable(&info)?;
 
@@ -470,7 +472,7 @@ pub fn execute_set_delegations(
     }
 
     let mut log = String::from('{');
-    let mut delegation_whitelist: Option<Vec<Delegation>> = None;
+    let mut delegation_whitelist: Option<Vec<DelegationPercentage>> = None;
         if let Some(delegations) = delegations {
             let mut tmp_wl = vec![];
             let mut total_percentage = 0u16;
@@ -499,6 +501,75 @@ pub fn execute_set_delegations(
         .add_attribute("action", "setDelegations")
         .add_attribute("from", info.sender)
         .add_attribute("delegations", log);
+    Ok(res)
+}
+
+pub fn execute_redelegate(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+
+    let config = CONFIG.load(deps.storage)?;
+    // only allow owner to call 
+    if info.sender != config.owner {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    let bonds = deps.querier.query_all_delegations(env.contract.address)?;
+    if bonds.is_empty() {
+        return Err(ContractError::ZeroBond {});
+    }
+    let mut delegations_reality: HashMap<String, Uint128> = HashMap::new();
+    for bond in bonds {
+        delegations_reality.insert(bond.validator, bond.amount.amount);
+    }
+
+    let mut delegations_expect: HashMap<String, Uint128> = HashMap::new();
+    if let Some(delegations) = config.delegations {
+        let mut remain_bonded_amount = get_bonded(&deps.querier, &env.contract.address)?;
+        let mut remain_shares = Uint128::from(POINTS);
+        for delegation in delegations {
+            let expect_bond_amount = remain_bonded_amount.multiply_ratio(delegation.percentage, remain_shares);
+            delegations_expect.insert(delegation.validator, expect_bond_amount);
+            remain_bonded_amount = remain_bonded_amount.checked_sub(expect_bond_amount).map_err(StdError::overflow)?;
+            remain_shares = remain_shares.checked_sub(Uint128::from(delegation.percentage)).map_err(StdError::overflow)?;
+        }
+    }
+
+    let mut delegations_need: HashMap<String, Uint128> = HashMap::new();
+    for (validator, expect) in delegations_expect {
+        let reality = *delegations_reality.entry(validator).or_insert(Uint128::zero());
+        if expect > reality {
+            delegations_need.insert(validator, expect - reality);
+        }
+    }
+
+    let res = Response::new();
+    for (src_validator, src_reality) in delegations_reality {
+        let src_expect = *delegations_expect.entry(src_validator).or_insert(Uint128::zero());
+        if src_reality > src_expect {
+            let remain_redelegate_amount = src_reality - src_expect;
+            for (dst_validator, dst_expect) in delegations_need{
+                let amount = dst_expect.min(remain_redelegate_amount);
+                res = res.add_message(StakingMsg::Redelegate {
+                    src_validator: src_validator,
+                    dst_validator: dst_validator,
+                    amount: coin(amount.u128(), &config.bond_denom),
+                });
+                remain_redelegate_amount = remain_redelegate_amount - amount;
+                if amount == dst_expect {
+                    delegations_need.remove(&dst_validator);
+                } else {
+                    delegations_need.insert(dst_validator, dst_expect - amount);
+                    break;
+                }
+            }
+        }
+    }
+    res = res.add_attribute("action", "redelegate")
+        .add_attribute("from", info.sender);
     Ok(res)
 }
 

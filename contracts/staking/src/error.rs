@@ -27,4 +27,6 @@ pub enum ContractError {
     #[error("User get no native token when unstaking")]
     GainNothingWhenUnstake {},
 
+    #[error("No token is being bonded with this contract")]
+    ZeroBond {},
 }
