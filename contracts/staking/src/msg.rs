@@ -5,12 +5,12 @@ use cosmwasm_std::{Addr, Uint128, Decimal, Coin};
 use cw20::{Cw20ReceiveMsg};
 
 use crate::linked_list::{NodeWithId, LinkedList};
-use crate::state::{Delegation};
+use crate::state::{DelegationPercentage};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InstantiateMsg {
     /// Delegations preferences for a whitelist of validators, each validator has a delegation percentage
-    pub delegations: Option<Vec<Delegation>>, 
+    pub delegations: Option<Vec<DelegationPercentage>>, 
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
@@ -23,7 +23,7 @@ pub enum ExecuteMsg {
     /// Admin call this method to set up liquid token address 
     SetLiquidToken { address: Addr },
     /// Admin call this method to change the whitelist of validators
-    SetDelegations { delegations: Option<Vec<Delegation>> },
+    SetDelegations { delegations: Option<Vec<DelegationPercentage>> },
     /// Admin call this method to redelegate all bonded token
     Redelegate {},
 
@@ -59,7 +59,7 @@ pub struct ConfigResponse {
     /// Liquid token address
     pub liquid_token_addr: String,
     /// Delegations preferences for a whitelist of validators, each validator has a delegation percentage
-    pub delegations: Option<Vec<Delegation>>, 
+    pub delegations: Option<Vec<DelegationPercentage>>, 
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]

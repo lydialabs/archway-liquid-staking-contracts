@@ -517,7 +517,7 @@ pub fn execute_redelegate(
         return Err(ContractError::Unauthorized {});
     }
 
-    let bonds = deps.querier.query_all_delegations(env.contract.address)?;
+    let bonds = deps.querier.query_all_delegations(env.contract.address.clone())?;
     if bonds.is_empty() {
         return Err(ContractError::ZeroBond {});
     }
@@ -539,31 +539,46 @@ pub fn execute_redelegate(
     }
 
     let mut delegations_need: HashMap<String, Uint128> = HashMap::new();
-    for (validator, expect) in delegations_expect {
-        let reality = *delegations_reality.entry(validator).or_insert(Uint128::zero());
-        if expect > reality {
-            delegations_need.insert(validator, expect - reality);
+    for (validator, expect) in delegations_expect.iter() {
+        let validator_temp = validator.clone();
+        if let Some(reality) = delegations_reality.get(validator) {
+            if expect > reality {
+                delegations_need.insert(validator_temp, *expect - *reality);
+            }
+        } else {
+            delegations_need.insert(validator_temp, *expect);
         }
     }
 
-    let res = Response::new();
-    for (src_validator, src_reality) in delegations_reality {
-        let src_expect = *delegations_expect.entry(src_validator).or_insert(Uint128::zero());
-        if src_reality > src_expect {
-            let remain_redelegate_amount = src_reality - src_expect;
-            for (dst_validator, dst_expect) in delegations_need{
-                let amount = dst_expect.min(remain_redelegate_amount);
-                res = res.add_message(StakingMsg::Redelegate {
-                    src_validator: src_validator,
-                    dst_validator: dst_validator,
-                    amount: coin(amount.u128(), &config.bond_denom),
-                });
-                remain_redelegate_amount = remain_redelegate_amount - amount;
-                if amount == dst_expect {
-                    delegations_need.remove(&dst_validator);
+    let mut res = Response::new();
+    for (src_validator, src_reality) in delegations_reality.iter() {
+        let mut remain_redelegate_amount = 
+            if let Some(src_expect) = delegations_expect.get(src_validator) {
+                if *src_reality > *src_expect {
+                    *src_reality - *src_expect
                 } else {
-                    delegations_need.insert(dst_validator, dst_expect - amount);
-                    break;
+                    Uint128::zero()
+                }
+            } else {
+                *src_reality
+            };
+
+        if remain_redelegate_amount > Uint128::zero() {
+            for (dst_validator, dst_expect) in delegations_need.iter_mut() {
+                if *dst_expect > Uint128::zero() {
+                    let amount = remain_redelegate_amount.min(*dst_expect);
+                    res = res.add_message(StakingMsg::Redelegate {
+                        src_validator: src_validator.clone(),
+                        dst_validator: dst_validator.clone(),
+                        amount: coin(amount.u128(), &config.bond_denom),
+                    });
+                    remain_redelegate_amount = remain_redelegate_amount - amount;
+                    if amount == *dst_expect {
+                        *dst_expect = Uint128::zero();
+                    } else {
+                        *dst_expect -= amount;
+                        break;
+                    }
                 }
             }
         }
