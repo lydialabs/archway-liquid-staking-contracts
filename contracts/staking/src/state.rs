@@ -15,6 +15,10 @@ pub struct ConfigInfo {
     /// All tokens are bonded to this validator
     /// FIXME: address validation doesn't work for validator addresses
     pub validator: String,
+    /// Swap contract address
+    pub swap_contract_addr: Addr,
+    /// Percentage of staking rewards taken as rewards for liquidity providers
+    pub lp_rewards_percentage: u16
 }
 
 /// Supply is dynamic and tracks the current supply of staked and ERC20 tokens.

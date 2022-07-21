@@ -19,6 +19,7 @@ use crate::state::{ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, UNDER_UN
 use cw_utils::{must_pay, nonpayable};
 
 const FALLBACK_RATIO: Decimal = Decimal::one();
+const POINTS: u16 = 10000;
 
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:liquid-staking";
@@ -48,6 +49,8 @@ pub fn instantiate(
         bond_denom: denom,
         liquid_token_addr: Addr::unchecked("none"), // msg.liquid_token_addr,
         validator: msg.validator,
+        swap_contract_addr: Addr::unchecked("none"),
+        lp_rewards_percentage: 500u16,
     };
     CONFIG.save(deps.storage, &config_init)?;
 
@@ -69,6 +72,8 @@ pub fn execute(
         ExecuteMsg::Stake {} => execute_stake(deps, env, info),
         ExecuteMsg::Claim {} => execute_claim(deps, info),
         ExecuteMsg::SetLiquidToken { address } => execute_set_liquid_token(deps, info, address),
+        ExecuteMsg::SetSwapContract { address } => execute_set_swap_contract(deps, info, address),
+        ExecuteMsg::SetLpRewardsPercentage { lp_rewards_percentage } => execute_set_lp_rewards_percentage(deps, info, lp_rewards_percentage),
         ExecuteMsg::Receive(msg) => execute_receive(deps, env, info, msg),
         ExecuteMsg::_ProcessToken { balance_before } => _process_token(deps, env, info, balance_before),
         ExecuteMsg::_PerformCheck {} => _perform_check(deps, env, info),
@@ -88,6 +93,7 @@ pub fn _process_token(
         return Err(ContractError::Unauthorized {});
     }
 
+    let mut res = Response::new();
     let zero_balance = Uint128::zero();
     // check how many available native token we have
     let config = CONFIG.load(deps.storage)?;
@@ -95,9 +101,16 @@ pub fn _process_token(
         .querier
         .query_balance(&env.contract.address, &config.bond_denom)?;
     let claimed_reward = balance.amount.checked_sub(balance_before).map_err(StdError::overflow)?;
+    // Send some percentage of claimed_reward as rewards for liquidity providers
+    let lp_rewards = claimed_reward.multiply_ratio(config.lp_rewards_percentage, POINTS);
+    let remain_reward = claimed_reward.checked_sub(lp_rewards).map_err(StdError::overflow)?;
+    res = res.add_message(BankMsg::Send {
+            to_address: config.swap_contract_addr.to_string(),
+            amount: coins(lp_rewards.u128(), config.bond_denom.clone()),
+        });
 
     let mut supply = TOTAL_SUPPLY.load(deps.storage)?;
-    supply.native += claimed_reward;
+    supply.native += remain_reward;
     balance.amount = balance.amount.checked_sub(supply.claims).map_err(StdError::overflow)?;
     // process unstaking queue
     let unstaking_requests: Vec<NodeWithId> = linked_list_get_list(deps.storage, 50)?;
@@ -127,7 +140,6 @@ pub fn _process_token(
             |unstaking: Option<Uint128>| -> StdResult<_> { Ok(unstaking.unwrap_or_default().checked_sub(payout)?) },
         )?;
     }
-    let mut res = Response::new();
     // and bond remain available to the validator
     if supply.unstakings == zero_balance && balance.amount > zero_balance{
         res = res.add_message(StakingMsg::Delegate {
@@ -149,7 +161,8 @@ pub fn _process_token(
 
     res = res
         .add_attribute("action", "_processToken")
-        .add_attribute("bonded", balance.amount);
+        .add_attribute("bonded", balance.amount)
+        .add_attribute("lp_rewards", lp_rewards);
     Ok(res)
 }
 
@@ -418,6 +431,54 @@ pub fn execute_set_liquid_token(
     Ok(res)
 }
 
+pub fn execute_set_swap_contract(
+    deps: DepsMut,
+    info: MessageInfo,
+    address: Addr,
+) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+
+    let config = CONFIG.load(deps.storage)?;
+    // only allow owner to call 
+    if info.sender != config.owner {
+        return Err(ContractError::Unauthorized {});
+    }
+    CONFIG.update(deps.storage, |mut config| -> StdResult<_> {
+        config.swap_contract_addr = address.clone();
+        Ok(config)
+    })?;
+
+    let res = Response::new()
+        .add_attribute("action", "setSwapContract")
+        .add_attribute("from", info.sender)
+        .add_attribute("address", address);
+    Ok(res)
+}
+
+pub fn execute_set_lp_rewards_percentage(
+    deps: DepsMut,
+    info: MessageInfo,
+    lp_rewards_percentage: u16,
+) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+
+    let config = CONFIG.load(deps.storage)?;
+    // only allow owner to call 
+    if info.sender != config.owner {
+        return Err(ContractError::Unauthorized {});
+    }
+    CONFIG.update(deps.storage, |mut config| -> StdResult<_> {
+        config.lp_rewards_percentage = lp_rewards_percentage.clone();
+        Ok(config)
+    })?;
+
+    let res = Response::new()
+        .add_attribute("action", "setSwapContract")
+        .add_attribute("from", info.sender)
+        .add_attribute("lp_rewards_percentage", Uint128::from(lp_rewards_percentage));
+    Ok(res)
+}
+
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
@@ -449,6 +510,8 @@ pub fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
         bond_denom: config.bond_denom,
         liquid_token_addr: config.liquid_token_addr.to_string(),
         validator: config.validator,
+        swap_contract_addr: config.swap_contract_addr,
+        lp_rewards_percentage: config.lp_rewards_percentage,
     };
     Ok(res)
 }

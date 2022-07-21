@@ -23,6 +23,10 @@ pub enum ExecuteMsg {
     Claim {},
     /// Admin call this method to set up liquid token address 
     SetLiquidToken { address: Addr },
+    /// Admin call this method to set up swap contract address 
+    SetSwapContract { address: Addr },
+    /// Admin call this method to set up lp rewards percentage
+    SetLpRewardsPercentage { lp_rewards_percentage: u16 },
 
     /// This accepts a properly-encoded ReceiveMsg from a cw20 contract (to process unstake request)
     Receive(Cw20ReceiveMsg),
@@ -58,6 +62,10 @@ pub struct ConfigResponse {
     /// All tokens are bonded to this validator
     /// FIXME: address validation doesn't work for validator addresses
     pub validator: String,
+    /// Swap contract address
+    pub swap_contract_addr: Addr,
+    /// Percentage of staking rewards taken as rewards for liquidity providers
+    pub lp_rewards_percentage: u16
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
