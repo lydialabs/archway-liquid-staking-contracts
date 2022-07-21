@@ -16,6 +16,18 @@
       {
         "type": "instantiate",
         "chainId": "constantine-1",
+        "codeId": 107,
+        "address": "archway1065zu9ttqqgny7q4cqadh37sk3s7wdpd2dhf7war2f5qt9ufq0ks2v9jr0",
+        "admin": "archway1wn94rnfz5m47k9ust42sp9altf0yqgrlhql2yr"
+      },
+      {
+        "type": "create",
+        "chainId": "constantine-1",
+        "codeId": 107
+      },
+      {
+        "type": "instantiate",
+        "chainId": "constantine-1",
         "codeId": 330,
         "address": "archway1v6nqc3yy9nuz2nd6lznalxmraavzyx4m084jhj0l988qg2nkc5rs0ctny3",
         "admin": "archway10h2w7jfxtc8m7wvjar9jtufpm3s7srqgqqyjea"

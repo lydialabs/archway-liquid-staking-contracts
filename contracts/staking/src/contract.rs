@@ -104,11 +104,12 @@ pub fn _process_token(
     // Send some percentage of claimed_reward as rewards for liquidity providers
     let lp_rewards = claimed_reward.multiply_ratio(config.lp_rewards_percentage, POINTS);
     let remain_reward = claimed_reward.checked_sub(lp_rewards).map_err(StdError::overflow)?;
-    res = res.add_message(BankMsg::Send {
-            to_address: config.swap_contract_addr.to_string(),
-            amount: coins(lp_rewards.u128(), config.bond_denom.clone()),
-        });
-
+    if lp_rewards > Uint128::zero() {
+        res = res.add_message(BankMsg::Send {
+                to_address: config.swap_contract_addr.to_string(),
+                amount: coins(lp_rewards.u128(), config.bond_denom.clone()),
+            });
+    }
     let mut supply = TOTAL_SUPPLY.load(deps.storage)?;
     supply.native += remain_reward;
     balance.amount = balance.amount.checked_sub(supply.claims).map_err(StdError::overflow)?;
