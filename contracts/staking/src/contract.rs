@@ -1,20 +1,20 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
 use cosmwasm_std::{
-    coin, coins, to_binary, Addr, BankMsg, Binary, Decimal, Deps, DepsMut, 
+    coin, coins, to_binary, Addr, BankMsg, Binary, Decimal, Deps, DepsMut,
     DistributionMsg, Env, MessageInfo, QuerierWrapper, QueryRequest, WasmQuery,
     Response, StakingMsg, StdError, StdResult, Uint128, WasmMsg
 };
 
 use cw2::set_contract_version;
-use cw20::{BalanceResponse, Cw20Contract, Cw20ExecuteMsg, Cw20ReceiveMsg, 
+use cw20::{BalanceResponse, Cw20Contract, Cw20ExecuteMsg, Cw20ReceiveMsg,
     TokenInfoResponse, Cw20QueryMsg};
 
 use crate::linked_list::{LinkedList, NodeWithId, node_update_value, linked_list, linked_list_read,
     linked_list_append, linked_list_remove_head, linked_list_get_list};
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, ConfigResponse, StatusResponse, UnstakingQueueResponse, 
-    InstantiateMsg, QueryMsg};
+use crate::msg::{ExecuteMsg, ConfigResponse, StatusResponse, UnstakingQueueResponse,
+    InstantiateMsg, QueryMsg, MigrateMsg};
 use crate::state::{ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, UNDER_UNSTAKING};
 use cw_utils::{must_pay, nonpayable};
 
@@ -23,6 +23,17 @@ const FALLBACK_RATIO: Decimal = Decimal::one();
 // version info for migration info
 const CONTRACT_NAME: &str = "crates.io:liquid-staking";
 const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+// only if you have migrate
+#[cfg_attr(not(feature = "library"), entry_point)]
+pub fn migrate(
+    _deps: DepsMut,
+    _env: Env,
+    _msg: MigrateMsg,
+) -> StdResult<Response> {
+    // do nothing, only upgrade
+    Ok(Response::default())
+}
 
 #[cfg_attr(not(feature = "library"), entry_point)]
 pub fn instantiate(
@@ -159,7 +170,7 @@ pub fn _perform_check(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Resp
     if info.sender != env.contract.address {
         return Err(ContractError::Unauthorized {});
     }
-    
+
     let config = CONFIG.load(deps.storage)?;
     let balance_before = deps
         .querier
@@ -259,7 +270,7 @@ pub fn _mint_liquid_token(
         amount: to_mint,
     })?;
     res = res.add_message(msg);
-    
+
     Ok(res)
 }
 
@@ -272,7 +283,7 @@ pub fn execute_stake(deps: DepsMut, env: Env, info: MessageInfo) -> Result<Respo
     let contract_addr = env.contract.address;
     let msg1 = to_binary(&ExecuteMsg::_PerformCheck {})?;
     let msg2 = to_binary(&ExecuteMsg::_MintLiquidToken { receiver: info.sender, native_amount: payment })?;
-    
+
     let res = Response::new()
         .add_message(WasmMsg::Execute {
             contract_addr: contract_addr.to_string(),
@@ -320,7 +331,7 @@ pub fn execute_unstake(
         |claimable: Option<Uint128>| -> StdResult<_> { Ok(claimable.unwrap_or_default() + amount_to_unstake) },
     )?;
     let msg2 = to_binary(&ExecuteMsg::_PerformCheck {})?;
-    
+
     let res = Response::new()
         .add_message(msg1)
         .add_message(WasmMsg::Execute {
@@ -347,7 +358,7 @@ pub fn execute_receive(
     nonpayable(&info)?;
 
     let config = CONFIG.load(deps.storage)?;
-    // only allow liquid token contract to call 
+    // only allow liquid token contract to call
     if info.sender != config.liquid_token_addr {
         return Err(ContractError::Unauthorized {});
     }
@@ -370,7 +381,7 @@ pub fn execute_claim(
         &info.sender,
         |claimable: Option<Uint128>| -> StdResult<_> {
             to_send = claimable.unwrap_or_default();
-            Ok(Uint128::zero()) 
+            Ok(Uint128::zero())
         },
     )?;
     if to_send.is_zero() {
@@ -381,7 +392,7 @@ pub fn execute_claim(
         supply.claims = supply.claims.checked_sub(to_send)?;
         Ok(supply)
     })?;
-    
+
     // transfer tokens to the sender
     let res = Response::new()
         .add_message(BankMsg::Send {
@@ -402,7 +413,7 @@ pub fn execute_set_liquid_token(
     nonpayable(&info)?;
 
     let config = CONFIG.load(deps.storage)?;
-    // only allow owner to call 
+    // only allow owner to call
     if info.sender != config.owner {
         return Err(ContractError::Unauthorized {});
     }

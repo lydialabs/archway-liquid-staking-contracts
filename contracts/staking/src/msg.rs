@@ -7,6 +7,9 @@ use cw20::{Cw20ReceiveMsg};
 use crate::linked_list::{NodeWithId, LinkedList};
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
+pub struct MigrateMsg {}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct InstantiateMsg {
     /// This is the liquid token contract address
     // pub liquid_token_addr: Addr,
@@ -19,9 +22,9 @@ pub struct InstantiateMsg {
 pub enum ExecuteMsg {
     /// Stake will stake and delegate all native tokens sent with the message and give back stkTokens
     Stake {},
-    /// Claim is used to claim the amount of available native tokens that you previously "unstaked" 
+    /// Claim is used to claim the amount of available native tokens that you previously "unstaked"
     Claim {},
-    /// Admin call this method to set up liquid token address 
+    /// Admin call this method to set up liquid token address
     SetLiquidToken { address: Addr },
 
     /// This accepts a properly-encoded ReceiveMsg from a cw20 contract (to process unstake request)
