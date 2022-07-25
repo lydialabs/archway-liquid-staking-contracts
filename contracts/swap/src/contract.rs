@@ -1,6 +1,7 @@
 #[cfg(not(feature = "library"))]
 use cosmwasm_std::entry_point;
-use cosmwasm_std::{coins, to_binary, Addr, BankMsg, Binary, Decimal, Deps, DepsMut, Env, MessageInfo, QueryRequest, WasmQuery, Response, StdError, StdResult, Uint128};
+use cosmwasm_std::{coins, to_binary, Addr, BankMsg, Binary, Decimal, Deps, DepsMut, Env, MessageInfo, 
+    QueryRequest, WasmQuery, Response, StdError, StdResult, Uint128};
 
 use cw2::set_contract_version;
 use cw20::{Cw20Contract, Cw20ExecuteMsg, Cw20ReceiveMsg};
@@ -9,7 +10,9 @@ use crate::linked_list::{LinkedList, NodeWithId, node_read, node_update_value,
                          linked_list, linked_list_read, linked_list_append, linked_list_remove_head,
                          linked_list_remove, linked_list_get_list};
 use crate::error::ContractError;
-use crate::msg::{ExecuteMsg, ConfigResponse, StatusResponse, InstantiateMsg, QueryMsg, OrderInfoOfResponse, OrderBookResponse, StakingManagerQueryMsg, StakingManagerStatusResponse, RewardsResponse};
+use crate::msg::{ExecuteMsg, ConfigResponse, StatusResponse, InstantiateMsg, QueryMsg, MigrateMsg, 
+    OrderInfoOfResponse, OrderBookResponse, StakingManagerQueryMsg, StakingManagerStatusResponse, 
+    RewardsResponse};
 use crate::state::{ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, QUEUE_ID, UNCLAIMED};
 use cw_utils::{must_pay, nonpayable};
 
@@ -68,6 +71,12 @@ pub fn execute(
         ExecuteMsg::SetSwapFee { swap_fee } => execute_set_swap_fee(deps, info, swap_fee),
         ExecuteMsg::Receive(msg) => execute_receive(deps, env, info, msg),
     }
+}
+
+#[cfg_attr(not(feature = "library"), entry_point)]
+pub fn migrate(_deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
+    // No state migrations performed, just returned a Response
+    Ok(Response::default())
 }
 
 fn get_ratio(numerator: Uint128, denominator: Uint128) -> Decimal {
