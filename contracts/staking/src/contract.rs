@@ -14,7 +14,7 @@ use crate::linked_list::{LinkedList, NodeWithId, node_update_value, linked_list,
     linked_list_append, linked_list_remove_head, linked_list_get_list};
 use crate::error::ContractError;
 use crate::msg::{ExecuteMsg, ConfigResponse, StatusResponse, UnstakingQueueResponse, 
-    InstantiateMsg, QueryMsg};
+    InstantiateMsg, QueryMsg, MigrateMsg};
 use crate::state::{ConfigInfo, Supply, CONFIG, TOTAL_SUPPLY, CLAIMABLE, UNDER_UNSTAKING};
 use cw_utils::{must_pay, nonpayable};
 
@@ -79,6 +79,12 @@ pub fn execute(
         ExecuteMsg::_PerformCheck {} => _perform_check(deps, env, info),
         ExecuteMsg::_MintLiquidToken { receiver, native_amount } => _mint_liquid_token(deps, env, info, receiver, native_amount),
     }
+}
+
+#[cfg_attr(not(feature = "library"), entry_point)]
+pub fn migrate(_deps: DepsMut, _env: Env, _msg: MigrateMsg) -> Result<Response, ContractError> {
+    // No state migrations performed, just returned a Response
+    Ok(Response::default())
 }
 
 // process unstaking queue then stake remain available native token
