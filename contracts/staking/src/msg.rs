@@ -27,7 +27,8 @@ pub enum ExecuteMsg {
     SetSwapContract { address: Addr },
     /// Admin call this method to set up lp rewards percentage
     SetLpRewardsPercentage { lp_rewards_percentage: u16 },
-
+    /// Admin call this method to set up unstaking time
+    SetUnstakingTime { unstaking_time: u64 },
     /// This accepts a properly-encoded ReceiveMsg from a cw20 contract (to process unstake request)
     Receive(Cw20ReceiveMsg),
 

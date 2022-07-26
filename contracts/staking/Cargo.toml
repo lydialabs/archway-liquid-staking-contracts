@@ -47,6 +47,7 @@ cw-storage-plus = "0.13.2"
 cw-utils = "0.13.2"
 cw20 = "0.13.2"
 cw2 = "0.13.2"
+cw0 = "0.10.0"
 schemars = "0.8"
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 thiserror = "1.0"

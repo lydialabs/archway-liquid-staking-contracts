@@ -6,6 +6,7 @@ use cosmwasm_std::{
     Response, StakingMsg, StdError, StdResult, Uint128, WasmMsg
 };
 
+use cw0::Expiration;
 use cw2::set_contract_version;
 use cw20::{BalanceResponse, Cw20Contract, Cw20ExecuteMsg, Cw20ReceiveMsg, 
     TokenInfoResponse, Cw20QueryMsg};
@@ -51,6 +52,8 @@ pub fn instantiate(
         validator: msg.validator,
         swap_contract_addr: Addr::unchecked("none"),
         lp_rewards_percentage: 500u16,
+        unstaking_time: 100,
+        unstaking_period: Expiration::AtHeight(_env.block.height),
     };
     CONFIG.save(deps.storage, &config_init)?;
 
@@ -74,6 +77,7 @@ pub fn execute(
         ExecuteMsg::SetLiquidToken { address } => execute_set_liquid_token(deps, info, address),
         ExecuteMsg::SetSwapContract { address } => execute_set_swap_contract(deps, info, address),
         ExecuteMsg::SetLpRewardsPercentage { lp_rewards_percentage } => execute_set_lp_rewards_percentage(deps, info, lp_rewards_percentage),
+        ExecuteMsg::SetUnstakingTime { unstaking_time } => execute_set_unstaking_time(deps, info, unstaking_time),
         ExecuteMsg::Receive(msg) => execute_receive(deps, env, info, msg),
         ExecuteMsg::_ProcessToken { balance_before } => _process_token(deps, env, info, balance_before),
         ExecuteMsg::_PerformCheck {} => _perform_check(deps, env, info),
@@ -102,7 +106,7 @@ pub fn _process_token(
     let mut res = Response::new();
     let zero_balance = Uint128::zero();
     // check how many available native token we have
-    let config = CONFIG.load(deps.storage)?;
+    let mut config = CONFIG.load(deps.storage)?;
     let mut balance = deps
         .querier
         .query_balance(&env.contract.address, &config.bond_denom)?;
@@ -156,7 +160,9 @@ pub fn _process_token(
     } else if supply.unstakings > zero_balance && balance.amount == zero_balance {
         // unbond if not enough available native token to process unstaking
         let bonded = get_bonded(&deps.querier, &env.contract.address)?;
-        if bonded > supply.native {
+        if bonded > supply.native && config.unstaking_period.is_expired(&env.block){
+            config.unstaking_period = Expiration::AtHeight(env.block.height + config.unstaking_time);
+            CONFIG.save(deps.storage, &config)?;
             let unstake_amount = bonded.checked_sub(supply.native).map_err(StdError::overflow)?;
             res = res.add_message(StakingMsg::Undelegate {
                 validator: config.validator,
@@ -483,6 +489,28 @@ pub fn execute_set_lp_rewards_percentage(
         .add_attribute("action", "setSwapContract")
         .add_attribute("from", info.sender)
         .add_attribute("lp_rewards_percentage", Uint128::from(lp_rewards_percentage));
+    Ok(res)
+}
+
+pub fn execute_set_unstaking_time(
+    deps: DepsMut,
+    info: MessageInfo,
+    unstaking_time: u64,
+) -> Result<Response, ContractError> {
+    nonpayable(&info)?;
+
+    let mut config = CONFIG.load(deps.storage)?;
+    // only allow liquid token contract to call
+    if info.sender != config.owner {
+        return Err(ContractError::Unauthorized {});
+    }
+    config.unstaking_time = unstaking_time.clone();
+    CONFIG.save(deps.storage, &config)?;
+
+    let res = Response::new()
+        .add_attribute("action", "setUnstakingTime")
+        .add_attribute("from", info.sender)
+        .add_attribute("amount", unstaking_time.to_string());
     Ok(res)
 }
 
