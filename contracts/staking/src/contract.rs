@@ -138,7 +138,8 @@ pub fn _process_token(
     }
     let mut supply = TOTAL_SUPPLY.load(deps.storage)?;
     supply.native += remain_reward;
-    balance.amount = balance.amount.checked_sub(supply.claims).map_err(StdError::overflow)?;
+    balance.amount = balance.amount.checked_sub(lp_rewards).map_err(StdError::overflow)?
+            .checked_sub(supply.claims).map_err(StdError::overflow)?;
     // process unstaking queue
     let unstaking_requests: Vec<NodeWithId> = linked_list_get_list(deps.storage, 50)?;
     for request in unstaking_requests {
