@@ -14,6 +14,16 @@
     },
     "deployments": [
       {
+        "type": "create",
+        "chainId": "torii-1",
+        "codeId": 52713
+      },
+      {
+        "type": "create",
+        "chainId": "torii-1",
+        "codeId": 52712
+      },
+      {
         "type": "instantiate",
         "chainId": "constantine-1",
         "codeId": 105,
@@ -144,14 +154,14 @@
     ]
   },
   "network": {
-    "name": "constantine",
-    "chainId": "constantine-1",
+    "name": "torii",
+    "chainId": "torii-1",
     "type": "testnet",
     "fees": {
-      "feeDenom": "uconst"
+      "feeDenom": "utorii"
     },
     "gas": {
-      "prices": "0.002uconst",
+      "prices": "0.002utorii",
       "mode": "auto",
       "adjustment": "1.3"
     },
@@ -163,7 +173,7 @@
     },
     "urls": {
       "rpc": {
-        "url": "https://rpc.constantine-1.archway.tech",
+        "url": "https://rpc.torii-1.archway.tech",
         "port": 443
       },
       "faucets": [
